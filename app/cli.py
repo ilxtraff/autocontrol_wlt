@@ -576,14 +576,35 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
         if not known:
             sys.exit("не задано ни одного порога — сначала заполните пороги по гео")
 
+        fb_client = engine.facebook_for(account)
         try:
-            adsets = engine.facebook_for(account).list_adsets(
+            adsets = fb_client.list_adsets(
                 account.account_id, statuses=None if args.all else ["ACTIVE"]
             )
         except FacebookError as exc:
             sys.exit(f"Facebook: {exc}")
 
-        added = skipped = 0
+        if not adsets and not args.all:
+            # Пусто по активным — посмотрим, есть ли вообще адсеты в кабинете,
+            # чтобы отличить «нет адсетов» от «нет активных».
+            try:
+                everything = fb_client.list_adsets(account.account_id, statuses=None)
+            except FacebookError:
+                everything = []
+            if everything:
+                from collections import Counter
+
+                by_status = Counter(
+                    (a.get("effective_status") or a.get("status") or "?") for a in everything
+                )
+                breakdown = ", ".join(f"{k}: {v}" for k, v in by_status.most_common())
+                print(f"активных адсетов нет. Всего в кабинете {len(everything)} — {breakdown}")
+                print("Добавьте флаг --all, чтобы взять не только активные.")
+            else:
+                print("в кабинете нет ни одного адсета — проверьте, тот ли это кабинет")
+            return
+
+        added = skipped = geo_fail = 0
         for item in adsets:
             campaign = item.get("campaign") or {}
             geo = args.geo.upper() if args.geo else detect_geo(
@@ -592,6 +613,7 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
             if geo is None:
                 print(f"  пропуск  {item.get('name')}: не понял гео")
                 skipped += 1
+                geo_fail += 1
                 continue
             if args.dry_run:
                 print(f"  поставил {item.get('name'):34} {geo}")
@@ -612,7 +634,12 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
 
         word = "поставил бы" if args.dry_run else "поставил"
         print(f"\n{word} под контроль: {added}, пропустил: {skipped}")
-        if args.dry_run:
+        if geo_fail and not args.geo:
+            print(
+                f"у {geo_fail} адсетов гео не распозналось по имени. Задайте всем одно "
+                "через --geo XX либо заведите нужные гео в порогах"
+            )
+        if args.dry_run and added:
             print("это была примерка — повторите без --dry-run")
 
 
