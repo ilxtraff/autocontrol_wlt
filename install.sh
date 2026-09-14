@@ -5,7 +5,16 @@ set -euo pipefail
 
 REPO="${REPO:-https://github.com/ilxtraff/autocontrol_wlt.git}"
 BRANCH="${BRANCH:-claude/admiring-bohr-tcaj3e}"
-DEST="${DEST:-/opt/autocontrol_wlt}"
+
+# Если скрипт лежит внутри готового чекаута — ставим именно его, а не клонируем
+# вторую копию в /opt: иначе служба смотрела бы на один каталог, а правки шли
+# бы в другой.
+_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+if [ -n "$_HERE" ] && [ -d "$_HERE/.git" ] && [ -f "$_HERE/app/main.py" ]; then
+    DEST="${DEST:-$_HERE}"
+else
+    DEST="${DEST:-/opt/autocontrol_wlt}"
+fi
 PORT="${PORT:-8000}"
 ADMIN="${ADMIN:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
@@ -169,19 +178,25 @@ IP="$(curl -s --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1
 if [ -n "$OK" ]; then
     printf '\n\033[1;32mГотово.\033[0m Сервис работает.\n\n'
     echo "    Адрес:  http://$IP:$PORT/"
-    echo "    Логин:  $ADMIN"
-    if [ -n "$CREATED_PASSWORD" ]; then
-        echo "    Пароль: $CREATED_PASSWORD"
-        echo
-        echo "    Пароль показан один раз — сохраните его."
+    if [ "$HAS_USER" = "yes" ]; then
+        # Пользователь был заведён раньше — своего логина мы не знаем.
+        echo "    Вход:   под тем логином, который завели при установке"
+        echo "            список: $DEST/.venv/bin/python -m app.cli users"
+    else
+        echo "    Логин:  $ADMIN"
+        if [ -n "$CREATED_PASSWORD" ]; then
+            echo "    Пароль: $CREATED_PASSWORD"
+            echo
+            echo "    Пароль показан один раз — сохраните его."
+        fi
     fi
-    cat <<'NEXT'
+    cat <<NEXT
 
 Сейчас включён режим без действий: движок считает и пишет решения
 в журнал, но адсеты не выключает. Это нарочно.
 
 Дальше:
-  cd /opt/autocontrol_wlt && source .venv/bin/activate
+  cd $DEST && source .venv/bin/activate
   python -m app.cli social-add "Камилла"     # мультитокен, ввод скрытый
   python -m app.cli fb-accounts              # проверить прокси и кабинеты
 

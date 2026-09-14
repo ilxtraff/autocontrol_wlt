@@ -67,8 +67,12 @@ else
 fi
 
 echo
-echo "Готово. Запустить:"
+echo "Готово. Запустить вручную:"
 echo "    source .venv/bin/activate"
 echo "    uvicorn app.main:app --host 0.0.0.0 --port 8000"
+echo
+echo "Этот скрипт НЕ создаёт службу — сервис умрёт вместе с сессией."
+echo "Чтобы он работал постоянно и перезапускался сам:"
+echo "    sudo bash install.sh"
 echo
 echo "Дальше — шаги 7+ в НАСТРОЙКА.md: ключ Keitaro и мультитокен."
