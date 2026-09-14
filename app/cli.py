@@ -545,13 +545,28 @@ def cmd_import_accounts(args: argparse.Namespace) -> None:
 
 
 def cmd_keitaro_probe(args: argparse.Namespace) -> None:
-    """Показывает сырой ответ Keitaro по адсетам кабинета — для отладки расхода."""
+    """Показывает сырой ответ Keitaro по адсетам и выносит вердикт по расходу."""
     import json
+    from collections import defaultdict
     from datetime import datetime, timezone
 
     from app.engine import AutocontrolEngine
     from app.models import AdAccount, ControlledAdset
     from app.tzwindow import day_window, to_tracker_range
+
+    def cost_like(row: dict) -> dict:
+        """Числовые поля строки, похожие на деньги и не равные нулю."""
+        out = {}
+        for key, val in row.items():
+            if key in ("clicks", "conversions", "leads", "sales") or "click" in key:
+                continue
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue
+            if num > 0:
+                out[key] = num
+        return out
 
     engine = AutocontrolEngine()
     with session_scope() as session:
@@ -570,37 +585,68 @@ def cmd_keitaro_probe(args: argparse.Namespace) -> None:
         keitaro = engine.keitaro_for(account)
         window = day_window(account.timezone_name, now=datetime.now(timezone.utc))
         date_from, date_to = to_tracker_range(window, keitaro.timezone_name)
+        field = keitaro.adset_field
 
-        print(f"кабинет {account.account_id}  поле адсета: {keitaro.adset_field}")
-        print(f"окно (в поясе трекера {keitaro.timezone_name}): {date_from} .. {date_to}")
-        print(f"проверяю адсеты: {', '.join(ids[:args.limit])}\n")
+        print(f"кабинет {account.account_id}  поле адсета: {field}")
+        print(f"окно (пояс трекера {keitaro.timezone_name}): {date_from} .. {date_to}")
+        print(f"адсеты: {', '.join(ids)}\n")
 
-        # 1. Как запрашивает движок: группировка по полю адсета.
-        payload, rows = keitaro.build_report(window, ids)
-        print("=== запрос движка (группировка по адсету) ===")
-        print("метрики:", ", ".join(payload["metrics"]))
-        if not rows:
-            print("  Keitaro вернула 0 строк — по этим ID за окно ничего нет.")
-        for row in rows[:args.limit]:
+        # 1. Как движок: группировка по полю адсета.
+        _p, adset_rows = keitaro.build_report(window, ids)
+        print("=== 1. группировка по адсету (как движок) ===")
+        if not adset_rows:
+            print("  0 строк — по этим ID за окно ничего нет")
+        for row in adset_rows:
             print(" ", json.dumps(row, ensure_ascii=False))
+        adset_cost_fields = set()
+        for row in adset_rows:
+            adset_cost_fields |= set(cost_like(row))
 
-        # 2. Для сравнения — группировка по кампаниям Keitaro: там расход точно есть.
-        print("\n=== для сравнения: те же адсеты, группировка по кампании ===")
-        try:
-            _p, camp_rows = keitaro.build_report(window, ids, grouping=["campaign"])
-            if not camp_rows:
-                print("  тоже пусто — значит, за окно вообще нет трафика по этим ID")
-            for row in camp_rows[:args.limit]:
-                cost = row.get("cost")
-                print(f"  {row.get('campaign', '?')}: cost={cost} conversions={row.get('conversions')} "
-                      f"clicks={row.get('clicks')}")
-        except Exception as exc:
-            print(f"  не удалось: {exc}")
+        # 2. Группировка по адсету + кампании: видно связь и есть ли там расход.
+        print("\n=== 2. по адсету + кампании ===")
+        _p2, pair_rows = keitaro.build_report(window, ids, grouping=[field, "campaign"])
+        adsets_per_campaign = defaultdict(set)
+        pair_cost_fields = set()
+        for row in pair_rows:
+            print(" ", json.dumps(row, ensure_ascii=False))
+            adsets_per_campaign[row.get("campaign", "?")].add(row.get(field))
+            pair_cost_fields |= set(cost_like(row))
 
-        print(
-            "\nЕсли в первом блоке cost=0, а во втором есть — Keitaro не разносит расход "
-            "по адсетам,\nтолько по кампаниям. Пришлите этот вывод — подстрою движок."
-        )
+        # 3. Группировка по кампании: там расход обычно и лежит.
+        print("\n=== 3. группировка по кампании ===")
+        _p3, camp_rows = keitaro.build_report(window, ids, grouping=["campaign"])
+        camp_cost_fields = set()
+        for row in camp_rows:
+            print(" ", json.dumps(row, ensure_ascii=False))
+            camp_cost_fields |= set(cost_like(row))
+
+        many = any(len(v) > 1 for v in adsets_per_campaign.values())
+
+        print("\n=== ВЕРДИКТ ===")
+        if adset_cost_fields:
+            names = ", ".join(sorted(adset_cost_fields))
+            if "cost" in adset_cost_fields:
+                print("  расход есть на уровне адсета в поле cost — движок должен его видеть.")
+                print("  Если doctor всё равно показывает 0 — пришлите вывод, посмотрим окно.")
+            else:
+                print(f"  расход есть на уровне адсета, но в поле: {names}")
+                print(f"  добавлю это имя в разбор — движок начнёт его читать.")
+        elif pair_cost_fields:
+            names = ", ".join(sorted(pair_cost_fields))
+            print(f"  расход виден при группировке адсет+кампания (поле: {names}).")
+            print("  подстрою движок на такую группировку.")
+        elif camp_cost_fields:
+            names = ", ".join(sorted(camp_cost_fields))
+            if many:
+                print(f"  расход только по кампаниям (поле: {names}), и в кампании НЕСКОЛЬКО адсетов.")
+                print("  разнесу расход кампании по адсетам пропорционально кликам.")
+            else:
+                print(f"  расход только по кампаниям (поле: {names}), 1 кампания = 1 адсет.")
+                print("  переключу движок на контроль по кампании — расход сойдётся точно.")
+        else:
+            print("  расхода нет ни на одном уровне за это окно.")
+            print("  Возможно, сейчас просто нет трафика — прогоните команду, когда открутка идёт.")
+        print("\nПришлите этот вывод целиком — по нему подстрою движок точно.")
 
 
 def cmd_import_adsets(args: argparse.Namespace) -> None:
