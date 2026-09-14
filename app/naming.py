@@ -13,6 +13,8 @@ import re
 _BRACKET = re.compile(r"\[([a-z]{2})\]")
 # Двухбуквенный код на границе слова: пробел, _, -, |, /, скобки, начало/конец.
 _TOKEN = re.compile(r"(?:^|[\s_\-|/([{.,])([a-z]{2})(?=$|[\s_\-|/)\]}.,])")
+# Код, склеенный с цифрами без разделителя: cz219499, hu3123123.
+_CODE_DIGITS = re.compile(r"(?:^|[\s_\-|/([{.,])([a-z]{2})(?=\d)")
 
 # Частые двухбуквенные куски, которые точно не гео.
 _NOT_GEO = {"ad", "fb", "po", "ab", "id", "no", "v1", "v2", "wa", "ww"}
@@ -54,6 +56,9 @@ def _codes_in(text: str | None) -> list[str]:
         if m not in _NOT_GEO:
             add(m)
     for m in _TOKEN.findall(text):
+        if m not in _NOT_GEO:
+            add(m)
+    for m in _CODE_DIGITS.findall(text):
         if m not in _NOT_GEO:
             add(m)
     for name, code in _COUNTRIES.items():

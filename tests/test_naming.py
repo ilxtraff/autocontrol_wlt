@@ -3,7 +3,7 @@ import pytest
 
 from app.naming import detect_geo, geo_candidates
 
-KNOWN = {"CZ", "SK", "PL", "IT", "RO"}
+KNOWN = {"CZ", "SK", "PL", "IT", "RO", "HU"}
 
 
 @pytest.mark.parametrize(
@@ -44,3 +44,24 @@ def test_candidates_surface_country_names():
 
 def test_candidates_dedupe():
     assert geo_candidates("cz_x-D1", "[CZ] czech joints") == ["CZ"]
+
+
+@pytest.mark.parametrize(
+    "campaign, expected",
+    [
+        ("cz219499", "CZ"),        # гео + цифры без разделителя
+        ("hu3123123", "HU"),
+        ("hu_2313_2323", "HU"),    # гео + подчёркивание
+        ("it500", "IT"),
+        ("CZ219499", "CZ"),        # заглавными
+        ("summer2024", None),      # su — не гео
+    ],
+)
+def test_geo_glued_to_digits(campaign, expected):
+    assert detect_geo("", campaign, KNOWN) == expected
+
+
+def test_glued_non_geo_is_not_flagged():
+    # ab, fb, ww склеены с цифрами, но это не гео.
+    for name in ("ab219499", "fb100", "ww2024"):
+        assert geo_candidates("", name) == []
