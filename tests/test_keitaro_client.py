@@ -157,3 +157,28 @@ def test_probe_returns_nothing_when_ids_are_absent():
     window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
     client = KeitaroClient(base_url="https://kt", api_key="K")
     assert client.probe_adset_field(window, ["1001"], client=make_client(handler)) == []
+
+
+def test_build_report_returns_payload_and_rows():
+    def handler(request):
+        return httpx.Response(200, json={"rows": [{"sub_id_6": "1001", "cost": 6.32}]})
+
+    window = day_window("America/Los_Angeles", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
+    client = KeitaroClient(base_url="https://kt", api_key="K", adset_field="sub_id_6")
+    payload, rows = client.build_report(window, ["1001"], client=make_client(handler))
+    assert payload["grouping"] == ["sub_id_6"]
+    assert rows == [{"sub_id_6": "1001", "cost": 6.32}]
+
+
+def test_build_report_custom_grouping():
+    captured = {}
+
+    def handler(request):
+        import json
+        captured["g"] = json.loads(request.read().decode())["grouping"]
+        return httpx.Response(200, json={"rows": []})
+
+    window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
+    client = KeitaroClient(base_url="https://kt", api_key="K")
+    client.build_report(window, ["1001"], grouping=["campaign"], client=make_client(handler))
+    assert captured["g"] == ["campaign"]

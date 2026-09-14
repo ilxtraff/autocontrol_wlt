@@ -544,6 +544,65 @@ def cmd_import_accounts(args: argparse.Namespace) -> None:
             )
 
 
+def cmd_keitaro_probe(args: argparse.Namespace) -> None:
+    """Показывает сырой ответ Keitaro по адсетам кабинета — для отладки расхода."""
+    import json
+    from datetime import datetime, timezone
+
+    from app.engine import AutocontrolEngine
+    from app.models import AdAccount, ControlledAdset
+    from app.tzwindow import day_window, to_tracker_range
+
+    engine = AutocontrolEngine()
+    with session_scope() as session:
+        account = session.scalar(
+            select(AdAccount).where(AdAccount.account_id == args.account.removeprefix("act_"))
+        )
+        if account is None:
+            sys.exit(f"кабинет {args.account} не заведён")
+        adsets = session.scalars(
+            select(ControlledAdset).where(ControlledAdset.account_pk == account.id).limit(args.limit)
+        ).all()
+        if not adsets:
+            sys.exit("под контролем нет адсетов этого кабинета — сначала import-adsets")
+
+        ids = [a.adset_id for a in adsets]
+        keitaro = engine.keitaro_for(account)
+        window = day_window(account.timezone_name, now=datetime.now(timezone.utc))
+        date_from, date_to = to_tracker_range(window, keitaro.timezone_name)
+
+        print(f"кабинет {account.account_id}  поле адсета: {keitaro.adset_field}")
+        print(f"окно (в поясе трекера {keitaro.timezone_name}): {date_from} .. {date_to}")
+        print(f"проверяю адсеты: {', '.join(ids[:args.limit])}\n")
+
+        # 1. Как запрашивает движок: группировка по полю адсета.
+        payload, rows = keitaro.build_report(window, ids)
+        print("=== запрос движка (группировка по адсету) ===")
+        print("метрики:", ", ".join(payload["metrics"]))
+        if not rows:
+            print("  Keitaro вернула 0 строк — по этим ID за окно ничего нет.")
+        for row in rows[:args.limit]:
+            print(" ", json.dumps(row, ensure_ascii=False))
+
+        # 2. Для сравнения — группировка по кампаниям Keitaro: там расход точно есть.
+        print("\n=== для сравнения: те же адсеты, группировка по кампании ===")
+        try:
+            _p, camp_rows = keitaro.build_report(window, ids, grouping=["campaign"])
+            if not camp_rows:
+                print("  тоже пусто — значит, за окно вообще нет трафика по этим ID")
+            for row in camp_rows[:args.limit]:
+                cost = row.get("cost")
+                print(f"  {row.get('campaign', '?')}: cost={cost} conversions={row.get('conversions')} "
+                      f"clicks={row.get('clicks')}")
+        except Exception as exc:
+            print(f"  не удалось: {exc}")
+
+        print(
+            "\nЕсли в первом блоке cost=0, а во втором есть — Keitaro не разносит расход "
+            "по адсетам,\nтолько по кампаниям. Пришлите этот вывод — подстрою движок."
+        )
+
+
 def cmd_import_adsets(args: argparse.Namespace) -> None:
     """Массовая постановка адсетов кабинета под контроль."""
     from app.clients.facebook import FacebookError
@@ -705,6 +764,11 @@ def main() -> None:
     p = sub.add_parser("fb-accounts", help="кабинеты, доступные токену")
     p.add_argument("--social", help="название или id социального аккаунта")
     p.set_defaults(func=cmd_fb_accounts)
+
+    p = sub.add_parser("keitaro-probe", help="сырой ответ Keitaro по адсетам (отладка расхода)")
+    p.add_argument("--account", required=True, help="ID рекламного кабинета")
+    p.add_argument("--limit", type=int, default=5, help="сколько адсетов показать")
+    p.set_defaults(func=cmd_keitaro_probe)
 
     p = sub.add_parser("import-accounts", help="завести рекламные кабинеты пачкой")
     p.add_argument("--social", help="название или id социального аккаунта")

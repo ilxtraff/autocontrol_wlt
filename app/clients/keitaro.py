@@ -81,36 +81,29 @@ class KeitaroClient:
             "Accept": "application/json",
         }
 
-    def fetch_adset_metrics(
+    def build_report(
         self,
         window: DayWindow,
         adset_ids: list[str],
+        *,
+        grouping: list[str] | None = None,
+        metrics: list[str] | None = None,
         client: httpx.Client | None = None,
-    ) -> dict[str, Metrics]:
-        """Метрики по каждому адсету за окно рекламного дня.
+    ) -> tuple[dict, list[dict]]:
+        """Сырой отчёт Keitaro: возвращает (отправленный payload, строки).
 
         Окно приходит в абсолютном времени (00:00 по кабинету) и здесь
         пересчитывается в локальное время трекера — Keitaro живёт по Москве.
         """
-        if not adset_ids:
-            return {}
-
         date_from, date_to = to_tracker_range(window, self.timezone_name)
+        group_by = grouping or [self.adset_field]
         payload = {
-            "range": {
-                "from": date_from,
-                "to": date_to,
-                "timezone": self.timezone_name,
-            },
-            "grouping": [self.adset_field],
-            "metrics": REPORT_METRICS,
+            "range": {"from": date_from, "to": date_to, "timezone": self.timezone_name},
+            "grouping": group_by,
+            "metrics": metrics or REPORT_METRICS,
             "filters": [
-                {
-                    "name": self.adset_field,
-                    "operator": "IN_LIST",
-                    "expression": list(adset_ids),
-                }
-            ],
+                {"name": self.adset_field, "operator": "IN_LIST", "expression": list(adset_ids)}
+            ] if adset_ids else [],
             "limit": max(len(adset_ids) * 2, 1000),
             "offset": 0,
         }
@@ -143,6 +136,19 @@ class KeitaroClient:
         rows = body.get("rows") if isinstance(body, dict) else None
         if rows is None:
             rows = body if isinstance(body, list) else []
+        return payload, [r for r in rows if isinstance(r, dict)]
+
+    def fetch_adset_metrics(
+        self,
+        window: DayWindow,
+        adset_ids: list[str],
+        client: httpx.Client | None = None,
+    ) -> dict[str, Metrics]:
+        """Метрики по каждому адсету за окно рекламного дня."""
+        if not adset_ids:
+            return {}
+
+        _payload, rows = self.build_report(window, adset_ids, client=client)
 
         result: dict[str, Metrics] = {}
         for row in rows:
