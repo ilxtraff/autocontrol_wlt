@@ -140,3 +140,11 @@ def test_broken_proxy_scheme_becomes_a_facebook_error():
 def test_socks5_proxy_reaches_the_client():
     client = FacebookClient("tok", proxy="socks5://bob:sec@1.2.3.4:1080")
     assert client._client_kwargs()["proxy"] == "socks5://bob:sec@1.2.3.4:1080"
+
+
+def test_unknown_error_codes_get_a_hint():
+    """#1/#2 — «неизвестная ошибка»; пользователю нужна подсказка, что делать."""
+    for code in (1, 2):
+        exc = FacebookError("Invalid request.", code=code)
+        assert "мёртвый токен" in exc.hint
+        assert "прокси" in exc.hint

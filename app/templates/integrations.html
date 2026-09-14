@@ -100,7 +100,7 @@
                     {% if s.proxy and s.proxy_status != 'ok' %}
                       <div class="sub">прокси: {{ PROXY_STATUS.get(s.proxy_status, s.proxy_status) }}</div>
                     {% endif %}
-                    {% if s.token_error %}<div class="sub" style="color:var(--red)">{{ s.token_error[:110] }}</div>{% endif %}
+                    {% if s.token_error %}<div class="sub" style="color:var(--red)">{{ s.token_error[:240] }}</div>{% endif %}
                   </td>
                   <td class="num sub">
                     {{ s.token_checked_at|when }}

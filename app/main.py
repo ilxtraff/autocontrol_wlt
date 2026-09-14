@@ -614,7 +614,10 @@ def check_social(
     info = client.describe_token()
     if info["error"]:
         social.token_status = "invalid"
-        social.token_error = info["error"]
+        # К сухому «Invalid request. (#1)» добавляем причину, если она понятна.
+        social.token_error = (
+            f"{info['error']} — {info['hint']}" if info.get("hint") else info["error"]
+        )
         # Куки мультитокена — шанс поднять токен без человека.
         if engine.refresh_token(social):
             social.token_error = ""
