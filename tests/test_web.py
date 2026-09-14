@@ -189,3 +189,113 @@ def test_keitaro_profile_can_be_edited(client):
         updated = s.scalar(select(KeitaroProfile))
         assert updated.adset_field == "sub_id_6"
         assert updated.api_key == "SECRET"
+
+
+def test_delete_buttons_appear_for_existing_records(client):
+    """В пустой базе кнопок нет — они должны появиться вместе с записями."""
+    login(client)
+    assert "/delete" not in client.get("/integrations").text
+
+    client.post(
+        "/integrations/keitaro",
+        data={"title": "Основной", "base_url": "https://kt", "api_key": "K",
+              "timezone_name": "Europe/Moscow", "adset_field": "sub_id_6"},
+        follow_redirects=False,
+    )
+    page = client.get("/integrations").text
+    assert "/integrations/keitaro/1/delete" in page
+    assert "Удалить трекер «Основной»?" in page
+
+
+def test_keitaro_deletion_via_http(client):
+    from sqlalchemy import select
+
+    import app.db as db
+    from app.models import KeitaroProfile
+
+    login(client)
+    client.post(
+        "/integrations/keitaro",
+        data={"title": "Основной", "base_url": "https://kt", "api_key": "K",
+              "timezone_name": "Europe/Moscow", "adset_field": "sub_id_6"},
+        follow_redirects=False,
+    )
+    with db.SessionLocal() as s:
+        profile = s.scalar(select(KeitaroProfile))
+
+    response = client.post(
+        f"/integrations/keitaro/{profile.id}/delete", follow_redirects=False
+    )
+    assert response.status_code == 303
+    with db.SessionLocal() as s:
+        assert s.scalar(select(KeitaroProfile)) is None
+
+
+def test_deleting_keitaro_in_use_is_refused(client):
+    from sqlalchemy import select
+
+    import app.db as db
+    from app.models import AdAccount, KeitaroProfile, SocialAccount
+
+    login(client)
+    client.post(
+        "/integrations/keitaro",
+        data={"title": "Основной", "base_url": "https://kt", "api_key": "K",
+              "timezone_name": "Europe/Moscow", "adset_field": "sub_id_6"},
+        follow_redirects=False,
+    )
+    with db.SessionLocal() as s:
+        profile = s.scalar(select(KeitaroProfile))
+        social = SocialAccount(title="Камилла")
+        social.access_token = "EAAG" + "y" * 40
+        s.add(social)
+        s.flush()
+        s.add(AdAccount(account_id="1", title="Кабинет-1",
+                        keitaro_id=profile.id, social_id=social.id))
+        s.commit()
+
+    response = client.post(f"/integrations/keitaro/{profile.id}/delete")
+    assert response.status_code == 400
+    assert "Кабинет-1" in response.text
+    with db.SessionLocal() as s:
+        assert s.scalar(select(KeitaroProfile)) is not None
+
+
+def test_deleting_missing_record_is_404(client):
+    login(client)
+    assert client.post("/integrations/social/9999/delete").status_code == 404
+
+
+def test_ad_account_with_unknown_links_is_refused(client):
+    """Несуществующий трекер или аккаунт в форме — это 400, а не падение."""
+    login(client)
+    response = client.post(
+        "/integrations/account",
+        data={"account_id": "123", "title": "К", "timezone_name": "UTC",
+              "social_id": 999, "keitaro_id": 999},
+    )
+    assert response.status_code == 400
+    assert "не найден" in response.text
+
+
+def test_ad_account_requires_an_id(client):
+    from sqlalchemy import select
+
+    import app.db as db
+    from app.models import KeitaroProfile, SocialAccount
+
+    login(client)
+    with db.SessionLocal() as s:
+        social = SocialAccount(title="К")
+        social.access_token = "EAAG" + "z" * 40
+        keitaro = KeitaroProfile(title="T", base_url="https://kt", api_key="k")
+        s.add_all([social, keitaro])
+        s.commit()
+        social_id, keitaro_id = social.id, keitaro.id
+
+    response = client.post(
+        "/integrations/account",
+        data={"account_id": "  ", "title": "К", "timezone_name": "UTC",
+              "social_id": social_id, "keitaro_id": keitaro_id},
+    )
+    assert response.status_code == 400

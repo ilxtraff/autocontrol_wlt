@@ -22,7 +22,7 @@
         </p>
         <div class="scroll">
           <table>
-            <thead><tr><th>Название</th><th>Адрес</th><th>Таймзона</th><th>Поле адсета</th><th>Новый ключ</th><th></th></tr></thead>
+            <thead><tr><th>Название</th><th>Адрес</th><th>Таймзона</th><th>Поле адсета</th><th>Новый ключ</th><th></th><th></th></tr></thead>
             <tbody>
               {% for k in keitaro_profiles %}
                 <tr>
@@ -32,15 +32,21 @@
                   <td><input class="mono" name="adset_field" form="k{{ k.id }}" value="{{ k.adset_field }}"></td>
                   <td><input name="api_key" form="k{{ k.id }}" placeholder="не менять"></td>
                   <td><button class="tiny primary" type="submit" form="k{{ k.id }}">Сохранить</button></td>
+                  <td>
+                    <button class="tiny danger" type="submit" form="kd{{ k.id }}"
+                            title="Удалить трекер">✕</button>
+                  </td>
                 </tr>
               {% else %}
-                <tr><td colspan="6" class="empty">Трекер не подключён</td></tr>
+                <tr><td colspan="7" class="empty">Трекер не подключён</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
         {% for k in keitaro_profiles %}
           <form id="k{{ k.id }}" method="post" action="/integrations/keitaro/{{ k.id }}" hidden></form>
+          <form id="kd{{ k.id }}" method="post" action="/integrations/keitaro/{{ k.id }}/delete" hidden
+                onsubmit="return confirm('Удалить трекер «{{ k.title }}»?')"></form>
         {% endfor %}
         <form method="post" action="/integrations/keitaro" class="row-form" style="margin-top:16px">
           <div class="field"><label>Название</label><input name="title" placeholder="Основной" required></div>
@@ -96,6 +102,8 @@
                   <td style="white-space:nowrap">
                     <button class="tiny primary" type="submit" form="c{{ s.id }}">Проверить</button>
                     <button class="tiny" type="submit" form="s{{ s.id }}">Сохранить</button>
+                    <button class="tiny danger" type="submit" form="sd{{ s.id }}"
+                            title="Удалить аккаунт вместе с токеном, куками и прокси">✕</button>
                   </td>
                 </tr>
                 <tr>
@@ -121,6 +129,8 @@
         {% for s in socials %}
           <form id="s{{ s.id }}" method="post" action="/integrations/social/{{ s.id }}" hidden></form>
           <form id="c{{ s.id }}" method="post" action="/integrations/social/{{ s.id }}/check" hidden></form>
+          <form id="sd{{ s.id }}" method="post" action="/integrations/social/{{ s.id }}/delete" hidden
+                onsubmit="return confirm('Удалить аккаунт «{{ s.title }}»? Токен, куки и прокси будут стёрты.')"></form>
         {% endfor %}
 
         <form method="post" action="/integrations/social" class="row-form" style="margin-top:18px">
@@ -147,7 +157,7 @@
         </p>
         <div class="scroll">
           <table>
-            <thead><tr><th>Кабинет</th><th>ID</th><th>Таймзона</th><th>Токен</th><th>Keitaro</th><th>Адсетов</th></tr></thead>
+            <thead><tr><th>Кабинет</th><th>ID</th><th>Таймзона</th><th>Токен</th><th>Keitaro</th><th>Адсетов</th><th></th></tr></thead>
             <tbody>
               {% for a in accounts %}
                 <tr>
@@ -157,13 +167,22 @@
                   <td class="sub">{{ a.social.title if a.social else '— не привязан —' }}</td>
                   <td class="sub">{{ a.keitaro.title if a.keitaro else '— не привязан —' }}</td>
                   <td class="num">{{ a.adsets|length }}</td>
+                  <td>
+                    <button class="tiny danger" type="submit" form="ad{{ a.id }}"
+                            title="Удалить кабинет из автоконтроля">✕</button>
+                  </td>
                 </tr>
               {% else %}
-                <tr><td colspan="6" class="empty">Кабинетов нет</td></tr>
+                <tr><td colspan="7" class="empty">Кабинетов нет</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
+        {% for a in accounts %}
+          <form id="ad{{ a.id }}" method="post" action="/integrations/account/{{ a.id }}/delete" hidden
+                onsubmit="return confirm('Удалить кабинет «{{ a.title or a.account_id }}»?{% if a.adsets %} Вместе с ним из автоконтроля уйдут {{ a.adsets|length }} адсетов и их журнал решений.{% endif %} Сами адсеты в Facebook не тронутся.')"></form>
+        {% endfor %}
+
         <form method="post" action="/integrations/account" class="row-form" style="margin-top:16px">
           <div class="field"><label>ID кабинета</label><input name="account_id" placeholder="949208347433940" required></div>
           <div class="field"><label>Название</label><input name="title" placeholder="необязательно"></div>

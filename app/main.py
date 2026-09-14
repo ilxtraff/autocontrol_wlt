@@ -29,7 +29,8 @@ from app.rules import RULE_TITLES, all_breaches
 from app.security import SESSION_COOKIE, issue_session
 from app.services import (
     ServiceError, attach_adset, authenticate, controlled_count_by_geo,
-    create_user, decisions_count, delete_adset, delete_user_threshold,
+    create_user, decisions_count, delete_ad_account, delete_adset,
+    delete_keitaro_profile, delete_social_account, delete_user_threshold,
     detach_adset, mark_human_resume, normalize_geo, resolve_thresholds,
     under_control_count, upsert_geo_threshold, upsert_user_threshold,
 )
@@ -637,6 +638,15 @@ def save_account(
     session: Session = Depends(get_session),
 ):
     account_id = account_id.strip().removeprefix("act_")
+    if not account_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "не указан ID кабинета")
+
+    # Ссылки проверяем до записи: иначе внешний ключ роняет запрос пятисоткой.
+    if session.get(SocialAccount, social_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "выбранный аккаунт не найден")
+    if session.get(KeitaroProfile, keitaro_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "выбранный трекер не найден")
+
     row = session.scalar(select(AdAccount).where(AdAccount.account_id == account_id))
     if row is None:
         row = AdAccount(account_id=account_id)
@@ -674,6 +684,64 @@ def save_account(
                 ) from exc
     session.commit()
     return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --------------------------------------------------------------------------- #
+#  Удаление из интеграций
+# --------------------------------------------------------------------------- #
+
+def _to_integrations() -> RedirectResponse:
+    return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/integrations/keitaro/{profile_id}/delete")
+def remove_keitaro(
+    profile_id: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    profile = session.get(KeitaroProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "трекер не найден")
+    try:
+        delete_keitaro_profile(session, profile)
+        session.commit()
+    except ServiceError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _to_integrations()
+
+
+@app.post("/integrations/social/{social_id}/delete")
+def remove_social(
+    social_id: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    social = session.get(SocialAccount, social_id)
+    if social is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "аккаунт не найден")
+    try:
+        delete_social_account(session, social)
+        session.commit()
+    except ServiceError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _to_integrations()
+
+
+@app.post("/integrations/account/{account_pk}/delete")
+def remove_ad_account(
+    account_pk: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    """Удаляет кабинет вместе с его адсетами. В Facebook ничего не меняется."""
+    account = session.get(AdAccount, account_pk)
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "кабинет не найден")
+    removed = delete_ad_account(session, account)
+    session.commit()
+    log.info("удалён кабинет %s вместе с %s адсетами", account.account_id, removed)
+    return _to_integrations()
 
 
 @app.post("/engine/run")

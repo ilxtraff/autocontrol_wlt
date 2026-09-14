@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from app.models import (
     DECISION_DETACHED, DECISION_HUMAN_RESUMED, ROLE_BUYER, SOURCE_GLOBAL,
     SOURCE_MANUAL, SOURCE_PERSONAL, STATE_OFF, STATE_PAUSED, STATE_RELEASED,
-    STATE_WATCHING, AdAccount, ControlledAdset, Decision, GeoThreshold, User,
-    UserGeoThreshold, utcnow,
+    STATE_WATCHING, AdAccount, ControlledAdset, Decision, GeoThreshold,
+    KeitaroProfile, SocialAccount, User, UserGeoThreshold, utcnow,
 )
 from app.rules import Thresholds
 from app.security import hash_password
@@ -273,6 +273,66 @@ def mark_human_resume(session: Session, adset: ControlledAdset, actor: str) -> N
         session, adset, DECISION_HUMAN_RESUMED, metrics=adset.last_metrics(),
         note=NOTE_HUMAN, actor=actor,
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Удаление из интеграций
+# --------------------------------------------------------------------------- #
+
+def _accounts_using(session: Session, **filters) -> list[AdAccount]:
+    query = select(AdAccount)
+    for field, value in filters.items():
+        query = query.where(getattr(AdAccount, field) == value)
+    return list(session.scalars(query.order_by(AdAccount.title)))
+
+
+def _blocked_by(accounts: list[AdAccount]) -> str:
+    names = [a.title or a.account_id for a in accounts[:5]]
+    tail = f" и ещё {len(accounts) - 5}" if len(accounts) > 5 else ""
+    return ", ".join(names) + tail
+
+
+def delete_keitaro_profile(session: Session, profile: KeitaroProfile) -> None:
+    """Удаляет трекер. Отказывает, пока на нём висят кабинеты.
+
+    Молча отвязать их нельзя: кабинет без трекера перестаёт считаться, и
+    автоконтроль по нему встанет без единого следа в журнале.
+    """
+    used = _accounts_using(session, keitaro_id=profile.id)
+    if used:
+        raise ServiceError(
+            f"трекер используют кабинеты: {_blocked_by(used)}. "
+            "Переключите их на другой трекер или удалите сначала их"
+        )
+    session.delete(profile)
+
+
+def delete_social_account(session: Session, social: SocialAccount) -> None:
+    """Удаляет социальный аккаунт вместе с токеном, куками и прокси."""
+    used = _accounts_using(session, social_id=social.id)
+    if used:
+        raise ServiceError(
+            f"аккаунт управляет кабинетами: {_blocked_by(used)}. "
+            "Переключите их на другой аккаунт или удалите сначала их"
+        )
+    session.delete(social)
+
+
+def delete_ad_account(session: Session, account: AdAccount) -> int:
+    """Удаляет кабинет вместе с его адсетами и журналом. Возвращает число адсетов.
+
+    Сами адсеты в Facebook не трогаются — из базы уходит только то, что
+    относится к автоконтролю.
+    """
+    adsets = list(
+        session.scalars(select(ControlledAdset).where(ControlledAdset.account_pk == account.id))
+    )
+    for adset in adsets:
+        # Журнал уходит вместе с адсетом: у связи стоит delete-orphan.
+        session.delete(adset)
+    session.flush()
+    session.delete(account)
+    return len(adsets)
 
 
 def under_control_count(session: Session) -> int:
