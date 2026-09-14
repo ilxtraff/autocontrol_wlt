@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 from dataclasses import dataclass, field
@@ -32,6 +34,46 @@ _COOKIE_KEEP = {"c_user", "xs", "datr", "sb", "fr", "presence", "wd", "dpr", "lo
 
 class MultitokenError(ValueError):
     """Мультитокен не удалось разобрать."""
+
+
+def _maybe_base64_json(text: str):
+    """Снимает base64-обёртку, если под ней JSON.
+
+    Антидетект-браузеры и сервисы аккаунтов часто отдают мультитокен как
+    base64 от JSON `{"cookies": [...], "ua": "...", "token": "..."}`. Обычный
+    токен или строка кук под это условие не попадают: они либо не base64,
+    либо декодируются не в JSON.
+    """
+    stripped = text.strip()
+    # base64 не содержит пробелов, кавычек, скобок и разделителей мультитокена.
+    _forbidden = set(" \t\r\n\"{}|;")
+    if len(stripped) < 40 or any(ch in _forbidden for ch in stripped):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9+/_\-]+={0,2}", stripped):
+        return None
+    padded = stripped + "=" * (-len(stripped) % 4)
+    for altchars in (None, b"-_"):
+        try:
+            decoded = base64.b64decode(padded, altchars=altchars, validate=False)
+            data = json.loads(decoded)
+        except (binascii.Error, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            # Экспорт одних кук массивом, без обёртки.
+            return {"cookies": data}
+    return None
+
+
+def _derive_uid(result: "Multitoken") -> None:
+    """Достаёт uid из куки c_user, если отдельно он не пришёл."""
+    if result.uid or "c_user=" not in result.cookies:
+        return
+    for chunk in result.cookies.split("; "):
+        if chunk.startswith("c_user="):
+            result.uid = chunk.split("=", 1)[1]
+            break
 
 
 @dataclass
@@ -209,6 +251,7 @@ def _from_mapping(data: dict) -> Multitoken:
     )
     if proxy:
         result.proxy = normalize_proxy(str(proxy))
+    _derive_uid(result)
     return result
 
 
@@ -217,6 +260,13 @@ def parse_multitoken(raw: str) -> Multitoken:
     text = (raw or "").strip()
     if not text:
         raise MultitokenError("пустой мультитокен")
+
+    # base64(JSON) — выгрузка из антидетект-браузеров и сервисов аккаунтов.
+    unwrapped = _maybe_base64_json(text)
+    if unwrapped is not None:
+        result = _from_mapping(unwrapped)
+        _require_something(result)
+        return result
 
     if text.startswith("{"):
         try:
@@ -265,12 +315,7 @@ def parse_multitoken(raw: str) -> Multitoken:
         if part != result.access_token:
             result.unknown.append(part)
 
-    if not result.uid and "c_user=" in result.cookies:
-        for chunk in result.cookies.split("; "):
-            if chunk.startswith("c_user="):
-                result.uid = chunk.split("=", 1)[1]
-                break
-
+    _derive_uid(result)
     _require_something(result)
     return result
 

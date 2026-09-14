@@ -144,3 +144,65 @@ def test_socks5_survives_a_real_httpx_client():
 def test_bare_host_port_defaults_to_http():
     """Без схемы угадать socks нельзя — считаем http и требуем явную схему."""
     assert normalize_proxy("1.2.3.4:1080") == "http://1.2.3.4:1080"
+
+
+def _b64_multitoken(payload, urlsafe=False):
+    import base64
+    import json
+
+    data = json.dumps(payload).encode()
+    if urlsafe:
+        return base64.urlsafe_b64encode(data).decode().rstrip("=")
+    return base64.b64encode(data).decode()
+
+
+# Форма выгрузки из антидетект-браузеров: base64 от JSON с куками-массивом.
+_BROWSER_EXPORT = {
+    "cookies": [
+        {"domain": ".facebook.com", "name": "datr", "value": "FAKEdatr"},
+        {"domain": ".facebook.com", "name": "sb", "value": "FAKEsb"},
+        {"domain": ".facebook.com", "name": "c_user", "value": "100099998888"},
+        {"domain": ".facebook.com", "name": "xs", "value": "33%3Afake%3A2"},
+        {"domain": ".facebook.com", "name": "fr", "value": "0fakefr"},
+        {"domain": ".facebook.com", "name": "ad_tracking", "value": "DROP"},
+    ],
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/148.0.0.0",
+    "token": "EAAB" + "S" * 100,
+}
+
+
+def test_base64_wrapped_json_is_unwrapped():
+    mt = parse_multitoken(_b64_multitoken(_BROWSER_EXPORT))
+    assert mt.access_token.startswith("EAAB")
+    assert mt.has_session
+    assert mt.uid == "100099998888"          # выведен из c_user
+    assert mt.user_agent.startswith("Mozilla/5.0")
+    assert "ad_tracking" not in mt.cookies    # мусорные куки не тащим
+
+
+def test_base64url_variant_is_accepted():
+    mt = parse_multitoken(_b64_multitoken(_BROWSER_EXPORT, urlsafe=True))
+    assert mt.has_session
+
+
+def test_base64_of_bare_cookie_array():
+    """Иногда base64 оборачивает только массив кук, без обёртки-словаря."""
+    mt = parse_multitoken(_b64_multitoken(_BROWSER_EXPORT["cookies"]))
+    assert mt.has_session
+    assert mt.access_token == ""
+
+
+def test_bare_token_is_not_mistaken_for_base64():
+    """Голый EAA-токен внешне похож на base64, но не декодируется в JSON."""
+    mt = parse_multitoken(TOKEN)
+    assert mt.access_token == TOKEN
+    assert not mt.has_session
+
+
+def test_base64_junk_is_refused_cleanly():
+    import base64
+
+    # Валидный base64, но под ним не JSON — должно упасть понятной ошибкой, не 500.
+    raw = base64.b64encode("\x00\x01\x02 просто байты, не json".encode("utf-8")).decode()
+    with pytest.raises(MultitokenError):
+        parse_multitoken(raw)

@@ -66,7 +66,9 @@
           Вставьте <b>мультитокен</b> — из него разберутся токен, куки, прокси и user-agent.
           Запросы пойдут <b>через прокси аккаунта</b>: с чужого IP Facebook быстро выдаёт чекпоинт.
           Куки нужны, чтобы <b>перевыпустить токен без вашего участия</b>, когда он протухнет.
-          Секреты хранятся в базе зашифрованными.
+          Секреты хранятся в базе зашифрованными. Формат — любой распространённый:
+          <span class="mono">токен|куки</span>, JSON или <b>base64</b>-строка из
+          антидетект-браузера (куки массивом внутри).
           <br>
           Прокси: <span class="mono">host:port</span>,
           <span class="mono">host:port:user:pass</span>,
@@ -143,7 +145,7 @@
           <div class="field"><label>Название</label><input name="title" placeholder="Камилла" required></div>
           <div class="field" style="flex:1;min-width:340px">
             <label>Мультитокен</label>
-            <input name="multitoken" placeholder="токен|куки|прокси|user-agent или JSON" required>
+            <input name="multitoken" placeholder="base64, JSON или токен|куки|прокси|user-agent" required>
           </div>
           <div class="field" style="min-width:200px">
             <label>Прокси, если его нет в мультитокене</label>
