@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}Автоконтроль адсетов{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with active='autocontrol' %}{% include "_nav.html" %}{% endwith %}
+  <main class="main">
+
+    <div class="page-head">
+      <h1>Автоконтроль адсетов</h1>
+      <span class="badge">выключает адсеты по порогам</span>
+      {% if settings.dry_run %}<span class="badge" style="background:rgba(214,170,84,.12);border-color:rgba(214,170,84,.4);color:var(--amber)">режим без действий</span>{% endif %}
+    </div>
+    <p class="hint">
+      Статистика берётся <b>из Keitaro</b>, а не из Facebook. Сутки отсчитываются
+      <b>от 00:00 по таймзоне рекламного кабинета</b> — окно пересчитывается в пояс трекера
+      ({{ settings.keitaro_timezone }}) на каждом запросе. Выключенный адсет остаётся под наблюдением
+      <b>{{ RECOVERY_HOURS }} часа</b>: вернулись метрики — включаем обратно, нет — снимаем контроль.
+    </p>
+
+    <div class="tabs">
+      <a href="/autocontrol?tab=thresholds" class="{{ 'active' if tab == 'thresholds' }}">Пороги</a>
+      <a href="/autocontrol?tab=adsets" class="{{ 'active' if tab == 'adsets' }}">Адсеты под контролем <span class="count">{{ under_control }}</span></a>
+      <a href="/autocontrol?tab=journal" class="{{ 'active' if tab == 'journal' }}">Журнал решений <span class="count">{{ decisions_total }}</span></a>
+    </div>
+
+    {# ------------------------------ ПОРОГИ ------------------------------ #}
+    {% if tab == 'thresholds' %}
+      <div class="panel">
+        <h2>Общие пороги по гео</h2>
+        <div class="panel-body">
+          <p class="hint" style="margin:0 0 14px">
+            Правила команды. Их <b>видят все</b>, кому открыт раздел: по ним считается автоконтроль,
+            когда в заливе выбран шаблон на это гео и свой порог не задан. Менять их могут только
+            admin и group CEO. Пороги <b>копируются в адсеты при заливе</b>: правка здесь влияет на
+            новые заливы, идущие доживают по своим числам.
+          </p>
+          <div class="scroll">
+            <table>
+              <thead><tr>
+                <th>Гео</th><th>Предельный CPA</th><th>Предельный расход без конверсий</th>
+                <th>Предельный uCPC</th><th>Под контролем</th>
+                {% if user.can_edit_global_thresholds %}<th></th>{% endif %}
+              </tr></thead>
+              <tbody>
+              {% for row in geo_rows %}
+                <tr>
+                {% if user.can_edit_global_thresholds %}
+                  <td><b>{{ row.geo }}</b><input type="hidden" name="geo" value="{{ row.geo }}" form="g{{ row.geo }}"></td>
+                  <td><input class="w-num" form="g{{ row.geo }}" name="max_cpa" inputmode="decimal" value="{{ '%.2f'|format(row.max_cpa) if row.max_cpa else '' }}" placeholder="—"></td>
+                  <td><input class="w-num" form="g{{ row.geo }}" name="max_spend_no_conv" inputmode="decimal" value="{{ '%.2f'|format(row.max_spend_no_conv) if row.max_spend_no_conv else '' }}" placeholder="—"></td>
+                  <td><input class="w-num" form="g{{ row.geo }}" name="max_ucpc" inputmode="decimal" value="{{ '%.4f'|format(row.max_ucpc) if row.max_ucpc else '' }}" placeholder="—"></td>
+                  <td class="num">{{ counts.get(row.geo, 0) }}</td>
+                  <td><button class="tiny primary" type="submit" form="g{{ row.geo }}">Сохранить</button></td>
+                {% else %}
+                  <td><b>{{ row.geo }}</b></td>
+                  <td class="num">{{ row.max_cpa|money }}</td>
+                  <td class="num">{{ row.max_spend_no_conv|money }}</td>
+                  <td class="num">{{ row.max_ucpc|rate }}</td>
+                  <td class="num">{{ counts.get(row.geo, 0) }}</td>
+                {% endif %}
+                </tr>
+              {% else %}
+                <tr><td colspan="6" class="empty">Общие пороги ещё не заданы</td></tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {% if user.can_edit_global_thresholds %}
+            {% for row in geo_rows %}<form id="g{{ row.geo }}" method="post" action="/thresholds/global" hidden></form>{% endfor %}
+            <form method="post" action="/thresholds/global" class="row-form" style="margin-top:16px">
+              <div class="field"><label>Гео</label><input class="w-geo" name="geo" maxlength="2" placeholder="HU" required></div>
+              <div class="field"><label>MAX CPA</label><input class="w-num" name="max_cpa" inputmode="decimal" placeholder="6"></div>
+              <div class="field"><label>MAX расход без конв.</label><input class="w-num" name="max_spend_no_conv" inputmode="decimal" placeholder="3.5"></div>
+              <div class="field"><label>MAX uCPC</label><input class="w-num" name="max_ucpc" inputmode="decimal" placeholder="0.09"></div>
+              <button class="primary" type="submit">Добавить гео</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Мои пороги</h2>
+        <div class="panel-body">
+          <p class="hint" style="margin:0 0 14px">
+            Свой список ведёте вы сами и выбираете из него при заливе. Не выбрали — подставится
+            общий дефолт по гео, поэтому вести весь список необязательно: держите здесь только те
+            гео, где ваши числа отличаются.
+          </p>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Гео</th><th>MAX CPA</th><th>MAX расход без конверсий</th><th>MAX uCPC</th><th></th></tr></thead>
+              <tbody>
+              {% for row in my_rows %}
+                <tr>
+                  <td><b>{{ row.geo }}</b><input type="hidden" name="geo" value="{{ row.geo }}" form="m{{ row.geo }}"></td>
+                  <td><input class="w-num" form="m{{ row.geo }}" name="max_cpa" inputmode="decimal" value="{{ '%.2f'|format(row.max_cpa) if row.max_cpa else '' }}" placeholder="—"></td>
+                  <td><input class="w-num" form="m{{ row.geo }}" name="max_spend_no_conv" inputmode="decimal" value="{{ '%.2f'|format(row.max_spend_no_conv) if row.max_spend_no_conv else '' }}" placeholder="—"></td>
+                  <td><input class="w-num" form="m{{ row.geo }}" name="max_ucpc" inputmode="decimal" value="{{ '%.4f'|format(row.max_ucpc) if row.max_ucpc else '' }}" placeholder="—"></td>
+                  <td>
+                    <button class="tiny primary" type="submit" form="m{{ row.geo }}">Сохранить</button>
+                    <button class="tiny" type="submit" form="d{{ row.geo }}" title="Убрать это гео из моего списка — заливы по нему пойдут по общему дефолту">✕</button>
+                  </td>
+                </tr>
+              {% else %}
+                <tr><td colspan="5" class="empty">Свои пороги не заданы — заливы идут по общему дефолту</td></tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {% for row in my_rows %}
+            <form id="m{{ row.geo }}" method="post" action="/thresholds/mine" hidden></form>
+            <form id="d{{ row.geo }}" method="post" action="/thresholds/mine/delete" hidden><input type="hidden" name="geo" value="{{ row.geo }}"></form>
+          {% endfor %}
+          <form method="post" action="/thresholds/mine" class="row-form" style="margin-top:16px">
+            <div class="field"><label>Гео</label><input class="w-geo" name="geo" maxlength="2" placeholder="IT" required></div>
+            <div class="field"><label>MAX CPA</label><input class="w-num" name="max_cpa" inputmode="decimal" placeholder="6"></div>
+            <div class="field"><label>MAX расход без конв.</label><input class="w-num" name="max_spend_no_conv" inputmode="decimal" placeholder="3.5"></div>
+            <div class="field"><label>MAX uCPC</label><input class="w-num" name="max_ucpc" inputmode="decimal" placeholder="0.09"></div>
+            <button class="primary" type="submit">Добавить гео</button>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {# --------------------------- АДСЕТЫ --------------------------- #}
+    {% if tab == 'adsets' %}
+      <div class="panel">
+        <h2>Адсеты под контролем</h2>
+        <div class="panel-body">
+          <p class="hint" style="margin:0 0 14px">
+            «Выключил» перепроверяется <b>по дню остановки</b> — долетевший лид может вернуть его;
+            через {{ RECOVERY_HOURS }} часа без изменений контроль снимается, адсет остаётся
+            выключенным — включить его сможет только человек.
+          </p>
+          <div style="margin-bottom:12px">
+            {% if group == 'campaign' %}
+              <a class="btn" href="/autocontrol?tab=adsets">Списком</a>
+            {% else %}
+              <a class="btn" href="/autocontrol?tab=adsets&group=campaign" title="Сгруппировать строки по кампаниям">По кампаниям</a>
+            {% endif %}
+            <form method="post" action="/engine/run" class="inline"><button class="tiny" type="submit">Прогнать тик сейчас</button></form>
+          </div>
+
+          {% macro adset_rows(items) %}
+            {% for v in items %}
+              {% set a = v.row %}
+              <tr>
+                <td>
+                  <div class="mono">{{ a.name or a.adset_id }}</div>
+                  <div class="sub">{{ a.adset_id }}{% if a.campaign_name %} · {{ a.campaign_name }}{% endif %}</div>
+                </td>
+                <td>{{ v.account_title }}<div class="sub">{{ v.account_tz }}</div></td>
+                <td><b>{{ a.geo }}</b><div class="sub">{{ SOURCE_TITLES.get(a.threshold_source, '') }}</div></td>
+                <td>
+                  <div class="metric {{ 'over' if 'cpa' in v.breaches }}"><span class="k">CPA</span><span class="v">{{ v.metrics.cpa|money }}</span><span class="lim">/ {{ a.max_cpa|money }}</span></div>
+                  <div class="metric {{ 'over' if 'spend_no_conv' in v.breaches }}"><span class="k">расход</span><span class="v">{{ v.metrics.spend|money }}</span><span class="lim">/ {{ a.max_spend_no_conv|money }}</span></div>
+                  <div class="metric {{ 'over' if 'ucpc' in v.breaches }}"><span class="k">uCPC</span><span class="v">{{ v.metrics.ucpc|rate }}</span><span class="lim">/ {{ a.max_ucpc|rate }}</span></div>
+                </td>
+                <td class="sub">лидов {{ a.last_leads }} · уников {{ a.last_unique_clicks }}<br>конв. {{ a.last_conversions }}</td>
+                <td>
+                  <span class="state {{ a.state }}">{{ a.state_title }}{% if v.rule_title %} · {{ v.rule_title }}{% endif %}</span>
+                  {% if a.last_error %}<div class="sub" style="color:var(--red)">{{ a.last_error }}</div>{% endif %}
+                </td>
+                <td class="num">
+                  {{ a.paused_at|when }}
+                  {% if a.state == STATE_PAUSED %}<div class="sub">уже {{ v.paused_for }} · день {{ a.control_day }}</div>{% endif %}
+                </td>
+                <td style="white-space:nowrap">
+                  {% if a.state in (STATE_PAUSED, STATE_RELEASED) %}
+                    <form method="post" action="/adsets/{{ a.id }}/enable" class="inline"><button class="tiny primary" type="submit">Включить</button></form>
+                  {% endif %}
+                  <form method="post" action="/adsets/{{ a.id }}/detach" class="inline"><button class="tiny" type="submit" title="Снять адсет с автоконтроля (статус адсета не меняется)">снять</button></form>
+                  <form method="post" action="/adsets/{{ a.id }}/delete" class="inline" onsubmit="return confirm('Удалить из автоконтроля вместе с журналом? Сам адсет в Facebook не тронется.')"><button class="tiny danger" type="submit" title="Удалить из автоконтроля насовсем — вместе с журналом решений">✕</button></form>
+                </td>
+              </tr>
+            {% endfor %}
+          {% endmacro %}
+
+          <div class="scroll">
+            <table>
+              <thead><tr>
+                <th>Адсет</th><th>Кабинет</th><th>Гео</th><th>Сейчас / порог</th>
+                <th>Трафик</th><th>Состояние</th><th>Выключен</th><th>Контроль</th>
+              </tr></thead>
+              <tbody>
+              {% if group == 'campaign' %}
+                {% for campaign, items in by_campaign.items() %}
+                  <tr><td colspan="8" style="background:var(--panel-2);font-size:12px;color:var(--muted)"><b>{{ campaign }}</b> · {{ items|length }}</td></tr>
+                  {{ adset_rows(items) }}
+                {% else %}
+                  <tr><td colspan="8" class="empty">Под контролем пока ничего нет</td></tr>
+                {% endfor %}
+              {% else %}
+                {{ adset_rows(views) }}
+                {% if not views %}<tr><td colspan="8" class="empty">Под контролем пока ничего нет</td></tr>{% endif %}
+              {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Поставить адсет под контроль</h2>
+        <div class="panel-body">
+          <p class="hint" style="margin:0 0 14px">
+            При заливе это происходит само. Пороги копируются в адсет в момент постановки:
+            свой порог по гео, если он есть, иначе общий дефолт команды.
+          </p>
+          <form method="post" action="/adsets/attach" class="row-form">
+            <div class="field"><label>ID адсета</label><input name="adset_id" placeholder="1203..." required></div>
+            <div class="field"><label>Имя</label><input name="name" placeholder="eblo2_it_ero-B4"></div>
+            <div class="field"><label>Кабинет</label>
+              <select name="account_pk" required>
+                {% for acc in accounts %}<option value="{{ acc.id }}">{{ acc.title or acc.account_id }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field"><label>Гео</label><input class="w-geo" name="geo" maxlength="2" placeholder="IT" required></div>
+            <div class="field"><label>Кампания</label><input name="campaign_name" placeholder="[AK47] [PO] [it] [eblo2_it_ero]"></div>
+            <button class="primary" type="submit">Под контроль</button>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {# --------------------------- ЖУРНАЛ --------------------------- #}
+    {% if tab == 'journal' %}
+      <div class="panel">
+        <h2>Журнал решений</h2>
+        <div class="panel-body">
+          <p class="hint" style="margin:0 0 14px">Каждое решение — с метриками на момент решения.</p>
+          <div class="tabs" style="margin-top:0">
+            <a href="/autocontrol?tab=journal" class="{{ 'active' if not filter_kind }}">Решение — любое</a>
+            {% for k, title in DECISION_TITLES.items() %}
+              <a href="/autocontrol?tab=journal&kind={{ k }}" class="{{ 'active' if filter_kind == k }}">{{ title }}</a>
+            {% endfor %}
+          </div>
+          <div class="tabs" style="margin-top:0">
+            <a href="/autocontrol?tab=journal{% if filter_kind %}&kind={{ filter_kind }}{% endif %}" class="{{ 'active' if not filter_rule }}">Правило — любое</a>
+            {% for r, title in RULE_TITLES.items() %}
+              <a href="/autocontrol?tab=journal&rule={{ r }}{% if filter_kind %}&kind={{ filter_kind }}{% endif %}" class="{{ 'active' if filter_rule == r }}">{{ title }}</a>
+            {% endfor %}
+          </div>
+
+          <div class="scroll">
+            <table>
+              <thead><tr>
+                <th>Когда ↓</th><th>Адсет</th><th>Решение</th><th>Правило</th>
+                <th>Расход</th><th>Конв.</th><th>CPA</th><th>uCPC</th><th>Прим.</th>
+              </tr></thead>
+              <tbody>
+              {% for d in decisions %}
+                <tr>
+                  <td class="num">{{ d.created_at|when }}{% if d.account_day %}<div class="sub">день {{ d.account_day }}</div>{% endif %}</td>
+                  <td class="mono">{{ d.adset_name }}</td>
+                  <td><span class="pill {{ d.kind }}">{{ d.kind_title }}</span>{% if d.actor and d.actor != 'движок' %}<div class="sub">{{ d.actor }}</div>{% endif %}</td>
+                  <td>{{ RULE_TITLES.get(d.rule, '—') }}{% if d.limit_value %}<div class="sub">порог {{ d.limit_value|rate if d.rule == 'ucpc' else d.limit_value|money }}</div>{% endif %}</td>
+                  <td class="num">{{ d.spend|money }}</td>
+                  <td class="num">{{ d.conversions }}</td>
+                  <td class="num">{{ d.cpa|money }}</td>
+                  <td class="num">{{ d.ucpc|rate }}</td>
+                  <td class="sub">{{ d.note }}</td>
+                </tr>
+              {% else %}
+                <tr><td colspan="9" class="empty">Решений пока нет</td></tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if decisions|length >= limit %}
+            <div style="margin-top:14px">
+              <a class="btn" href="/autocontrol?tab=journal&limit={{ limit + 200 }}{% if filter_kind %}&kind={{ filter_kind }}{% endif %}{% if filter_rule %}&rule={{ filter_rule }}{% endif %}">Показать ещё 200</a>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+  </main>
+</div>
+{% endblock %}

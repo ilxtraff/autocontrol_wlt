@@ -1,0 +1,11 @@
+<nav class="side">
+  <div class="brand">АВТОКОНТРОЛЬ</div>
+  <a href="/autocontrol" class="{{ 'active' if active == 'autocontrol' }}">Автоконтроль</a>
+  <a href="/integrations" class="{{ 'active' if active == 'integrations' }}">Интеграции</a>
+  <div class="spacer"></div>
+  <div class="whoami">
+    <div class="name">{{ user.display_name or user.login }}</div>
+    <div class="role">{{ user.role_title }}{% if user.team %} · {{ user.team }}{% endif %}</div>
+  </div>
+  <form method="post" action="/logout"><button type="submit" class="tiny">Выйти</button></form>
+</nav>

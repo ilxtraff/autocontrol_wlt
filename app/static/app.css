@@ -1,0 +1,169 @@
+/* Тема ATLANTIX CRM: тёмный фон, тёплый белый текст, зелёный акцент. */
+:root {
+  --bg: #101010;
+  --panel: #161616;
+  --panel-2: rgba(255, 252, 237, 0.04);
+  --text: rgba(255, 252, 237, 0.92);
+  --muted: rgba(255, 252, 237, 0.45);
+  --faint: rgba(255, 252, 237, 0.28);
+  --border: rgba(255, 252, 237, 0.12);
+  --green: rgb(76, 175, 106);
+  --green-bg: rgba(76, 175, 106, 0.12);
+  --green-br: rgba(74, 140, 74, 0.45);
+  --red: rgb(226, 96, 96);
+  --red-bg: rgba(226, 96, 96, 0.12);
+  --red-br: rgba(226, 96, 96, 0.4);
+  --amber: rgb(214, 170, 84);
+  --amber-bg: rgba(214, 170, 84, 0.12);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Geist, "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.layout { display: flex; min-height: 100vh; }
+
+/* ------------------------------- меню ------------------------------- */
+.side {
+  width: 216px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.brand { font-weight: 700; letter-spacing: .04em; padding: 6px 12px 18px; font-size: 15px; }
+.side a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; color: var(--muted); font-size: 14px;
+}
+.side a:hover { background: var(--panel-2); color: var(--text); }
+.side a.active { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+.side .spacer { flex: 1; }
+.whoami { padding: 10px 12px; border-top: 1px solid var(--border); margin-top: 8px; }
+.whoami .name { font-weight: 600; }
+.whoami .role { color: var(--faint); font-size: 12px; }
+
+.main { flex: 1; min-width: 0; padding: 22px 26px 60px; }
+
+/* ------------------------------ шапка ------------------------------ */
+.page-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+h1 { font-size: 18px; font-weight: 700; margin: 0; }
+.badge {
+  padding: 4px 9px; border-radius: 6px; font-size: 10px; letter-spacing: .06em;
+  background: var(--green-bg); border: 1px solid var(--green-br); color: var(--green);
+  text-transform: uppercase; font-weight: 600;
+}
+.hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 980px; margin: 10px 0 20px; }
+.hint b { color: var(--text); font-weight: 600; }
+
+/* ------------------------------ вкладки ---------------------------- */
+.tabs { display: flex; gap: 8px; margin: 16px 0 18px; flex-wrap: wrap; }
+.tabs a {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 13px;
+}
+.tabs a.active { background: var(--panel-2); color: var(--text); }
+.tabs .count { color: var(--faint); font-size: 11px; }
+
+/* ------------------------------ панели ----------------------------- */
+.panel {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  margin-bottom: 18px; overflow: hidden;
+}
+.panel > h2 {
+  font-size: 13px; font-weight: 600; margin: 0; padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-body { padding: 14px 16px; }
+
+/* ------------------------------ таблицы ---------------------------- */
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-weight: 500; color: var(--faint); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .05em; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+td { padding: 10px 12px; border-bottom: 1px solid rgba(255, 252, 237, 0.06); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sub { color: var(--faint); font-size: 11.5px; }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ------------------------------ формы ------------------------------ */
+input, select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; outline: none; padding: 8px 10px;
+  font-family: inherit; width: 100%;
+}
+input:focus, select:focus { border-color: var(--green-br); }
+input::placeholder { color: var(--faint); }
+label { display: block; font-size: 11px; color: var(--faint); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .04em; }
+.field { margin-bottom: 12px; }
+.row-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.row-form .field { margin-bottom: 0; }
+.w-geo { width: 84px; } .w-num { width: 140px; }
+
+button, .btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px;
+  border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12.5px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+}
+button:hover, .btn:hover { border-color: var(--muted); }
+button.primary { background: var(--green-bg); border-color: var(--green-br); color: var(--green); }
+button.danger { background: transparent; border-color: var(--red-br); color: var(--red); }
+button.tiny { padding: 5px 10px; font-size: 11px; }
+.inline { display: inline; }
+
+/* ------------------------------ статусы ---------------------------- */
+.state { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
+.state.watching { color: var(--green); }
+.state.paused { color: var(--red); }
+.state.released { color: var(--amber); }
+.state.off { color: var(--faint); }
+
+.pill { display: inline-block; padding: 3px 8px; border-radius: 5px; font-size: 11px; }
+.pill.paused { background: var(--red-bg); color: var(--red); }
+.pill.resumed { background: var(--green-bg); color: var(--green); }
+.pill.released { background: var(--amber-bg); color: var(--amber); }
+.pill.human { background: rgba(120, 160, 220, 0.14); color: rgb(140, 175, 230); }
+.pill.error { background: var(--red-bg); color: var(--red); }
+.pill.detached { background: var(--panel-2); color: var(--muted); }
+
+/* «сейчас / порог» */
+.metric { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; font-size: 12px; }
+.metric .k { color: var(--faint); font-size: 10.5px; width: 46px; }
+.metric .v { font-variant-numeric: tabular-nums; }
+.metric .lim { color: var(--faint); font-variant-numeric: tabular-nums; }
+.metric.over .v { color: var(--red); font-weight: 600; }
+
+.empty { padding: 32px 16px; text-align: center; color: var(--faint); font-size: 13px; }
+.error-box {
+  background: var(--red-bg); border: 1px solid var(--red-br); color: var(--red);
+  padding: 10px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 14px;
+}
+
+/* ------------------------------- вход ------------------------------ */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login-card { width: 100%; max-width: 360px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 26px; }
+.login-card h1 { margin-bottom: 6px; }
+.login-card .hint { margin: 0 0 20px; }
+.login-card button { width: 100%; justify-content: center; padding: 11px; }
+
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .side { width: 100%; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  .side .spacer { display: none; }
+  .main { padding: 16px; }
+}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Вход · Автоконтроль{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <form class="login-card" method="post" action="/login">
+    <h1>Автоконтроль адсетов</h1>
+    <p class="hint">Выключает адсеты по порогам, считая статистику из Keitaro.</p>
+    {% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+    <div class="field">
+      <label for="login">Логин</label>
+      <input id="login" name="login" value="{{ login|default('') }}" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <input type="hidden" name="next" value="{{ next|default('/autocontrol') }}">
+    <button class="primary" type="submit">Войти</button>
+  </form>
+</div>
+{% endblock %}

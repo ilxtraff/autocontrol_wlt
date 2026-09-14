@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Интеграции · Автоконтроль{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with active='integrations' %}{% include "_nav.html" %}{% endwith %}
+  <main class="main">
+    <div class="page-head"><h1>Интеграции</h1></div>
+    <p class="hint">
+      Автоконтролю нужны две вещи: <b>ключ Keitaro</b>, откуда берётся статистика, и
+      <b>токен социального аккаунта Facebook</b>, которым выключаются и включаются адсеты.
+      У кабинета обязательно должна быть таймзона — по ней отсчитываются сутки.
+    </p>
+
+    <div class="panel">
+      <h2>Keitaro</h2>
+      <div class="panel-body">
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Название</th><th>Адрес</th><th>Таймзона</th><th>Поле адсета</th></tr></thead>
+            <tbody>
+              {% for k in keitaro_profiles %}
+                <tr><td>{{ k.title }}</td><td class="mono sub">{{ k.base_url }}</td><td>{{ k.timezone_name }}</td><td class="mono">{{ k.adset_field }}</td></tr>
+              {% else %}
+                <tr><td colspan="4" class="empty">Трекер не подключён</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <form method="post" action="/integrations/keitaro" class="row-form" style="margin-top:16px">
+          <div class="field"><label>Название</label><input name="title" placeholder="Основной" required></div>
+          <div class="field"><label>Адрес</label><input name="base_url" placeholder="https://tracker.example.com" required></div>
+          <div class="field"><label>API-ключ</label><input name="api_key" required></div>
+          <div class="field"><label>Таймзона трекера</label><input name="timezone_name" value="Europe/Moscow"></div>
+          <div class="field"><label>Поле с ID адсета</label><input name="adset_field" value="sub_id_2"></div>
+          <button class="primary" type="submit">Добавить</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Социальные аккаунты Facebook</h2>
+      <div class="panel-body">
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Название</th><th>FB User ID</th><th>Токен</th><th>Кабинетов</th></tr></thead>
+            <tbody>
+              {% for s in socials %}
+                <tr><td>{{ s.title }}</td><td class="mono sub">{{ s.fb_user_id or '—' }}</td>
+                    <td class="sub">…{{ s.access_token[-6:] }}</td><td class="num">{{ s.accounts|length }}</td></tr>
+              {% else %}
+                <tr><td colspan="4" class="empty">Токенов нет</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <form method="post" action="/integrations/social" class="row-form" style="margin-top:16px">
+          <div class="field"><label>Название</label><input name="title" placeholder="Maria Gorbunova" required></div>
+          <div class="field"><label>FB User ID</label><input name="fb_user_id" placeholder="необязательно"></div>
+          <div class="field" style="min-width:280px"><label>Access token</label><input name="access_token" required></div>
+          <button class="primary" type="submit">Добавить</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Рекламные кабинеты</h2>
+      <div class="panel-body">
+        <p class="hint" style="margin:0 0 14px">
+          Таймзона кабинета — то, от чего считается день автоконтроля. Оставьте поле пустым,
+          и она подтянется из Facebook по токену.
+        </p>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Кабинет</th><th>ID</th><th>Таймзона</th><th>Токен</th><th>Keitaro</th><th>Адсетов</th></tr></thead>
+            <tbody>
+              {% for a in accounts %}
+                <tr>
+                  <td>{{ a.title or '—' }}</td>
+                  <td class="mono sub">{{ a.account_id }}</td>
+                  <td>{{ a.timezone_name or '—' }}<div class="sub">{{ offsets.get(a.id, '—') }}</div></td>
+                  <td class="sub">{{ a.social.title if a.social else '— не привязан —' }}</td>
+                  <td class="sub">{{ a.keitaro.title if a.keitaro else '— не привязан —' }}</td>
+                  <td class="num">{{ a.adsets|length }}</td>
+                </tr>
+              {% else %}
+                <tr><td colspan="6" class="empty">Кабинетов нет</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <form method="post" action="/integrations/account" class="row-form" style="margin-top:16px">
+          <div class="field"><label>ID кабинета</label><input name="account_id" placeholder="949208347433940" required></div>
+          <div class="field"><label>Название</label><input name="title" placeholder="необязательно"></div>
+          <div class="field"><label>Таймзона</label><input name="timezone_name" placeholder="America/Los_Angeles"></div>
+          <div class="field"><label>Токен</label>
+            <select name="social_id" required>{% for s in socials %}<option value="{{ s.id }}">{{ s.title }}</option>{% endfor %}</select>
+          </div>
+          <div class="field"><label>Keitaro</label>
+            <select name="keitaro_id" required>{% for k in keitaro_profiles %}<option value="{{ k.id }}">{{ k.title }}</option>{% endfor %}</select>
+          </div>
+          <button class="primary" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
