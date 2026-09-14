@@ -83,6 +83,8 @@ Keitaro работает по Москве, рекламные кабинеты 
 
 ## Установка
 
+Пошаговая инструкция с нуля — в [НАСТРОЙКА.md](НАСТРОЙКА.md). Коротко:
+
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # и поправьте AC_SECRET_KEY
@@ -145,8 +147,10 @@ python -m app.engine
 python -m app.cli createuser sasha --role buyer   # роли: buyer, admin, ceo
 python -m app.cli passwd sasha
 python -m app.cli users
+python -m app.cli doctor      # проверить интеграции и что реально видит Keitaro
+python -m app.cli fb-accounts # кабинеты, доступные токену
+python -m app.cli import-adsets --account 123  # поставить адсеты кабинета под контроль
 python -m app.cli tick        # один проход движка вручную
-python -m app.cli seed        # демо-данные, чтобы посмотреть интерфейс
 ```
 
 ## Тесты

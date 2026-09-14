@@ -3,7 +3,8 @@
     python -m app.cli createuser sasha --role buyer
     python -m app.cli passwd sasha
     python -m app.cli users
-    python -m app.cli tick
+    python -m app.cli doctor
+    python -m app.cli import-adsets --account 1790847419029975
 """
 from __future__ import annotations
 
@@ -73,59 +74,218 @@ def cmd_tick(_: argparse.Namespace) -> None:
     print(report.as_dict())
 
 
-def cmd_seed(_: argparse.Namespace) -> None:
-    """Демо-данные: пороги из CRM и пара адсетов, чтобы посмотреть интерфейс."""
-    from app.models import AdAccount, KeitaroProfile, SocialAccount
-    from app.services import attach_adset, upsert_geo_threshold, upsert_user_threshold
+def cmd_doctor(_: argparse.Namespace) -> None:
+    """Проверяет всё, что нужно движку, и показывает, что реально видит Keitaro."""
+    from datetime import datetime, timezone
+
+    from app.clients.facebook import FacebookClient, FacebookError
+    from app.clients.keitaro import KeitaroClient, KeitaroError
+    from app.config import get_settings
+    from app.engine import AutocontrolEngine
+    from app.models import AdAccount, ControlledAdset, KeitaroProfile, SocialAccount
+    from app.tzwindow import UnknownTimezone, day_window, describe_offset, to_tracker_range
+
+    settings = get_settings()
+    engine = AutocontrolEngine()
+    now = datetime.now(timezone.utc)
+    problems = 0
 
     with session_scope() as session:
-        admin = session.scalar(select(User).where(User.role.in_([ROLE_ADMIN, ROLE_CEO])))
-        if admin is None:
-            sys.exit("сначала создайте admin: python -m app.cli createuser admin --role admin")
+        print("== Keitaro ==")
+        profiles = session.scalars(select(KeitaroProfile)).all()
+        if not profiles:
+            print("  нет ни одного трекера — добавьте на странице «Интеграции»")
+            problems += 1
+        for profile in profiles:
+            try:
+                KeitaroClient(
+                    base_url=profile.base_url,
+                    api_key=profile.api_key,
+                    timezone_name=profile.timezone_name,
+                    adset_field=profile.adset_field,
+                    timeout=settings.keitaro_timeout,
+                ).ping()
+                print(f"  [ок]     {profile.title}: отвечает, поле адсета {profile.adset_field}")
+            except KeitaroError as exc:
+                print(f"  [ОШИБКА] {profile.title}: {exc}")
+                problems += 1
 
-        for geo, cpa, spend, ucpc in [
-            ("ES", 10.00, 4.00, 0.1700),
-            ("HU", 10.00, 5.00, 0.1900),
-            ("MX", 6.00, 3.00, 0.1200),
-            ("RO", 8.00, 3.00, 0.1800),
-            ("IT", 11.00, 5.00, 0.2000),
-        ]:
-            upsert_geo_threshold(session, geo, cpa, spend, ucpc, user=admin)
-        upsert_user_threshold(session, admin.id, "IT", 9.00, 4.00, 0.1500)
+        print("\n== Токены Facebook ==")
+        socials = session.scalars(select(SocialAccount)).all()
+        if not socials:
+            print("  нет ни одного токена — добавьте на странице «Интеграции»")
+            problems += 1
+        for social in socials:
+            try:
+                who = FacebookClient(
+                    social.access_token, settings.fb_api_version, settings.fb_timeout
+                ).check_token()
+                print(f"  [ок]     {social.title}: живой, {who.get('name')} ({who.get('id')})")
+            except FacebookError as exc:
+                print(f"  [ОШИБКА] {social.title}: {exc}")
+                problems += 1
 
-        keitaro = session.scalar(select(KeitaroProfile))
-        if keitaro is None:
-            keitaro = KeitaroProfile(
-                title="Демо-трекер", base_url="https://tracker.example.com",
-                api_key="demo", timezone_name="Europe/Moscow",
-            )
-            session.add(keitaro)
-        social = session.scalar(select(SocialAccount))
-        if social is None:
-            social = SocialAccount(title="Демо-профиль", access_token="demo-token")
-            session.add(social)
-        session.flush()
+        print("\n== Кабинеты и сутки ==")
+        accounts = session.scalars(select(AdAccount)).all()
+        if not accounts:
+            print("  кабинетов нет")
+            problems += 1
+        for account in accounts:
+            label = account.title or account.account_id
+            try:
+                window = day_window(account.timezone_name, now=now)
+            except UnknownTimezone as exc:
+                print(f"  [ОШИБКА] {label}: {exc}")
+                problems += 1
+                continue
+            tracker_tz = account.keitaro.timezone_name if account.keitaro else settings.keitaro_timezone
+            start, end = to_tracker_range(window, tracker_tz)
+            print(f"  [ок]     {label}: {describe_offset(account.timezone_name, now)}")
+            print(f"           сутки {window.account_day} -> в {tracker_tz}: {start} .. {end}")
 
-        account = session.scalar(select(AdAccount))
+        print("\n== Что видит Keitaro по адсетам ==")
+        for account in accounts:
+            adsets = session.scalars(
+                select(ControlledAdset).where(ControlledAdset.account_pk == account.id).limit(5)
+            ).all()
+            if not adsets:
+                continue
+            label = account.title or account.account_id
+            try:
+                window = day_window(account.timezone_name, now=now)
+                metrics = engine.keitaro_for(account).fetch_adset_metrics(
+                    window, [a.adset_id for a in adsets]
+                )
+            except (KeitaroError, UnknownTimezone) as exc:
+                print(f"  [ОШИБКА] {label}: {exc}")
+                problems += 1
+                continue
+
+            print(f"  {label}:")
+            for adset in adsets:
+                row = metrics.get(adset.adset_id)
+                flags = []
+                if row.spend == 0:
+                    flags.append("нет расхода")
+                if row.unique_clicks == 0:
+                    flags.append("нет уников")
+                mark = "  <-- " + ", ".join(flags) if flags else ""
+                print(
+                    f"    {adset.name or adset.adset_id:26} расход ${row.spend:>8.2f} "
+                    f"конв. {row.conversions:>3} уники {row.unique_clicks:>5}{mark}"
+                )
+
+    print()
+    if problems:
+        print(f"Проблем: {problems}. Движок не сможет работать, пока они есть.")
+        sys.exit(1)
+    print("Всё на месте.")
+    print(
+        "Если расход и уники везде нулевые, а трафик идёт — значит, Keitaro не получает\n"
+        "расход или ID адсета. Проверьте макрос в ссылке и передачу расхода."
+    )
+
+
+def cmd_fb_accounts(args: argparse.Namespace) -> None:
+    """Кабинеты, доступные токену: откуда взять ID и таймзону."""
+    from app.clients.facebook import FacebookClient, FacebookError
+    from app.config import get_settings
+    from app.models import SocialAccount
+
+    settings = get_settings()
+    with session_scope() as session:
+        socials = session.scalars(select(SocialAccount)).all()
+        if args.social:
+            socials = [s for s in socials if s.title == args.social or str(s.id) == args.social]
+        if not socials:
+            sys.exit("нет подходящего токена")
+
+        for social in socials:
+            print(f"== {social.title} ==")
+            try:
+                accounts = FacebookClient(
+                    social.access_token, settings.fb_api_version, settings.fb_timeout
+                ).list_accounts()
+            except FacebookError as exc:
+                print(f"  ошибка: {exc}")
+                continue
+            for account in accounts:
+                print(
+                    f"  {account.get('account_id', ''):20} "
+                    f"{(account.get('timezone_name') or '—'):26} {account.get('name', '')}"
+                )
+
+
+def cmd_import_adsets(args: argparse.Namespace) -> None:
+    """Массовая постановка адсетов кабинета под контроль."""
+    from app.clients.facebook import FacebookError
+    from app.engine import AutocontrolEngine
+    from app.models import AdAccount, GeoThreshold, UserGeoThreshold
+    from app.naming import detect_geo
+    from app.services import ServiceError, attach_adset
+
+    engine = AutocontrolEngine()
+    with session_scope() as session:
+        account = session.scalar(
+            select(AdAccount).where(AdAccount.account_id == args.account.removeprefix("act_"))
+        )
         if account is None:
-            account = AdAccount(
-                account_id="1790847419029975", title="乐启智抖-2 (10:00)",
-                timezone_name="America/Los_Angeles",
-                social_id=social.id, keitaro_id=keitaro.id,
-            )
-            session.add(account)
-            session.flush()
+            sys.exit(f"кабинет {args.account} не заведён — добавьте его на «Интеграциях»")
 
-        for adset_id, name in [
-            ("1001", "eblo2_it_ero-B4"),
-            ("1002", "eblo4_it_ero-B5"),
-            ("1003", "eblo2_it_ero-B3"),
-        ]:
-            attach_adset(
-                session, adset_id=adset_id, account=account, geo="IT", name=name,
-                campaign_name="[AK47] [PO] [it] [eblo2_it_ero]", owner=admin,
+        owner = None
+        if args.user:
+            owner = session.scalar(select(User).where(User.login == args.user.strip().lower()))
+            if owner is None:
+                sys.exit(f"нет такого пользователя: {args.user}")
+
+        known = {g for (g,) in session.execute(select(GeoThreshold.geo)).all()}
+        if owner is not None:
+            known |= {
+                g for (g,) in session.execute(
+                    select(UserGeoThreshold.geo).where(UserGeoThreshold.user_id == owner.id)
+                ).all()
+            }
+        if not known:
+            sys.exit("не задано ни одного порога — сначала заполните пороги по гео")
+
+        try:
+            adsets = engine.facebook_for(account).list_adsets(
+                account.account_id, statuses=None if args.all else ["ACTIVE"]
             )
-        print("демо-данные записаны")
+        except FacebookError as exc:
+            sys.exit(f"Facebook: {exc}")
+
+        added = skipped = 0
+        for item in adsets:
+            campaign = item.get("campaign") or {}
+            geo = args.geo.upper() if args.geo else detect_geo(
+                item.get("name"), campaign.get("name"), known
+            )
+            if geo is None:
+                print(f"  пропуск  {item.get('name')}: не понял гео")
+                skipped += 1
+                continue
+            if args.dry_run:
+                print(f"  поставил {item.get('name'):34} {geo}")
+                added += 1
+                continue
+            try:
+                attach_adset(
+                    session, adset_id=item["id"], account=account, geo=geo,
+                    name=item.get("name", ""), campaign_id=campaign.get("id", ""),
+                    campaign_name=campaign.get("name", ""), owner=owner,
+                )
+            except ServiceError as exc:
+                print(f"  пропуск  {item.get('name')}: {exc}")
+                skipped += 1
+                continue
+            print(f"  поставил {item.get('name'):34} {geo}")
+            added += 1
+
+        word = "поставил бы" if args.dry_run else "поставил"
+        print(f"\n{word} под контроль: {added}, пропустил: {skipped}")
+        if args.dry_run:
+            print("это была примерка — повторите без --dry-run")
 
 
 def main() -> None:
@@ -147,7 +307,21 @@ def main() -> None:
 
     sub.add_parser("users", help="список пользователей").set_defaults(func=cmd_users)
     sub.add_parser("tick", help="прогнать один тик автоконтроля").set_defaults(func=cmd_tick)
-    sub.add_parser("seed", help="демо-данные для просмотра интерфейса").set_defaults(func=cmd_seed)
+    sub.add_parser("doctor", help="проверить интеграции и что видит Keitaro").set_defaults(
+        func=cmd_doctor
+    )
+
+    p = sub.add_parser("fb-accounts", help="кабинеты, доступные токену")
+    p.add_argument("--social", help="название или id социального аккаунта")
+    p.set_defaults(func=cmd_fb_accounts)
+
+    p = sub.add_parser("import-adsets", help="поставить адсеты кабинета под контроль")
+    p.add_argument("--account", required=True, help="ID рекламного кабинета")
+    p.add_argument("--geo", help="задать гео всем вместо определения по имени")
+    p.add_argument("--user", help="чьи личные пороги применять")
+    p.add_argument("--all", action="store_true", help="не только активные адсеты")
+    p.add_argument("--dry-run", action="store_true", help="показать, но не сохранять")
+    p.set_defaults(func=cmd_import_adsets)
 
     args = parser.parse_args()
     init_db()

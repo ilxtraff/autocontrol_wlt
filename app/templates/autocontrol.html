@@ -211,14 +211,14 @@
           </p>
           <form method="post" action="/adsets/attach" class="row-form">
             <div class="field"><label>ID адсета</label><input name="adset_id" placeholder="1203..." required></div>
-            <div class="field"><label>Имя</label><input name="name" placeholder="eblo2_it_ero-B4"></div>
+            <div class="field"><label>Имя</label><input name="name" placeholder="имя адсета"></div>
             <div class="field"><label>Кабинет</label>
               <select name="account_pk" required>
                 {% for acc in accounts %}<option value="{{ acc.id }}">{{ acc.title or acc.account_id }}</option>{% endfor %}
               </select>
             </div>
             <div class="field"><label>Гео</label><input class="w-geo" name="geo" maxlength="2" placeholder="IT" required></div>
-            <div class="field"><label>Кампания</label><input name="campaign_name" placeholder="[AK47] [PO] [it] [eblo2_it_ero]"></div>
+            <div class="field"><label>Кампания</label><input name="campaign_name" placeholder="имя кампании"></div>
             <button class="primary" type="submit">Под контроль</button>
           </form>
         </div>

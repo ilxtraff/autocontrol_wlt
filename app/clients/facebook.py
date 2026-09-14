@@ -104,6 +104,30 @@ class FacebookClient:
         )
         return {key: value for key, value in body.items() if isinstance(value, dict)}
 
+    def list_adsets(self, account_id: str, statuses: list[str] | None = None) -> list[dict]:
+        """Все адсеты кабинета с их кампаниями, страницами по 200."""
+        params = {
+            "fields": "id,name,status,effective_status,campaign{id,name}",
+            "limit": 200,
+        }
+        if statuses:
+            import json as _json
+
+            params["filtering"] = _json.dumps(
+                [{"field": "effective_status", "operator": "IN", "value": statuses}]
+            )
+
+        out: list[dict] = []
+        path = _act(account_id) + "/adsets"
+        while True:
+            body = self._request("GET", path, params=params)
+            out.extend(body.get("data", []))
+            after = (body.get("paging", {}).get("cursors", {}) or {}).get("after")
+            if not after or not body.get("paging", {}).get("next"):
+                break
+            params = dict(params, after=after)
+        return out
+
     def set_adset_status(self, adset_id: str, status: str) -> bool:
         self._request("POST", adset_id, params={"status": status})
         return True
