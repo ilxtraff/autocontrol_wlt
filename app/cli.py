@@ -461,6 +461,89 @@ def cmd_fb_accounts(args: argparse.Namespace) -> None:
                 )
 
 
+def _pick_one(session, model, arg, what):
+    """Находит запись по названию/id, либо берёт единственную."""
+    from sqlalchemy import select as _select
+
+    rows = list(session.scalars(_select(model)))
+    if not rows:
+        sys.exit(f"нет ни одного {what} — заведите на «Интеграциях»")
+    if arg:
+        for row in rows:
+            if row.title == arg or str(row.id) == arg:
+                return row
+        sys.exit(f"{what} «{arg}» не найден")
+    if len(rows) > 1:
+        names = ", ".join(r.title for r in rows)
+        sys.exit(f"{what}ов несколько ({names}) — укажите нужный явно")
+    return rows[0]
+
+
+def cmd_import_accounts(args: argparse.Namespace) -> None:
+    """Заводит рекламные кабинеты, доступные токену, пачкой."""
+    from app.clients.facebook import FacebookError, client_for_social
+    from app.config import get_settings
+    from app.models import AdAccount, KeitaroProfile, SocialAccount
+    from app.tzwindow import UnknownTimezone, resolve_tz
+
+    settings = get_settings()
+    with session_scope() as session:
+        social = _pick_one(session, SocialAccount, args.social, "аккаунт")
+        keitaro = _pick_one(session, KeitaroProfile, args.keitaro, "трекер")
+
+        try:
+            accounts = client_for_social(social, settings).list_accounts()
+        except FacebookError as exc:
+            sys.exit(f"Facebook: {exc}")
+        if not accounts:
+            sys.exit("токен не вернул ни одного кабинета")
+
+        added = updated = skipped = 0
+        for item in accounts:
+            acc_id = str(item.get("account_id") or item.get("id", "")).removeprefix("act_")
+            if not acc_id:
+                continue
+            if args.filter and args.filter.lower() not in (item.get("name", "").lower() + acc_id):
+                skipped += 1
+                continue
+
+            tz = (item.get("timezone_name") or "").strip()
+            if tz:
+                try:
+                    resolve_tz(tz)
+                except UnknownTimezone:
+                    tz = ""  # незнакомую таймзону не пишем — иначе движок споткнётся
+
+            row = session.scalar(select(AdAccount).where(AdAccount.account_id == acc_id))
+            if row is None:
+                row = AdAccount(account_id=acc_id)
+                session.add(row)
+                added += 1
+                mark = "завёл  "
+            else:
+                updated += 1
+                mark = "обновил"
+            row.title = item.get("name", "") or row.title
+            row.timezone_name = tz or row.timezone_name
+            row.currency = item.get("currency", "") or row.currency
+            row.social_id = social.id
+            row.keitaro_id = keitaro.id
+            if not args.quiet:
+                warn = "" if row.timezone_name else "  <-- без таймзоны, задайте вручную"
+                print(f"  {mark}  {acc_id:20} {(row.timezone_name or '—'):24} {row.title}{warn}")
+
+        print(f"\nзавёл: {added}, обновил: {updated}" + (f", пропустил: {skipped}" if skipped else ""))
+        session.flush()  # без этого запрос ниже не увидит только что заведённые кабинеты
+        no_tz = session.scalars(
+            select(AdAccount).where(AdAccount.timezone_name == "")
+        ).all()
+        if no_tz:
+            print(
+                f"внимание: у {len(no_tz)} кабинетов нет таймзоны — по ним автоконтроль "
+                "не пойдёт, пока не проставите её на «Интеграциях»"
+            )
+
+
 def cmd_import_adsets(args: argparse.Namespace) -> None:
     """Массовая постановка адсетов кабинета под контроль."""
     from app.clients.facebook import FacebookError
@@ -570,6 +653,13 @@ def main() -> None:
     p = sub.add_parser("fb-accounts", help="кабинеты, доступные токену")
     p.add_argument("--social", help="название или id социального аккаунта")
     p.set_defaults(func=cmd_fb_accounts)
+
+    p = sub.add_parser("import-accounts", help="завести рекламные кабинеты пачкой")
+    p.add_argument("--social", help="название или id социального аккаунта")
+    p.add_argument("--keitaro", help="название или id трекера")
+    p.add_argument("--filter", help="только кабинеты, где имя/ID содержит эту строку")
+    p.add_argument("--quiet", action="store_true", help="без построчного вывода")
+    p.set_defaults(func=cmd_import_accounts)
 
     p = sub.add_parser("import-adsets", help="поставить адсеты кабинета под контроль")
     p.add_argument("--account", required=True, help="ID рекламного кабинета")

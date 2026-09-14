@@ -159,6 +159,7 @@ python -m app.cli passwd sasha
 python -m app.cli users
 python -m app.cli doctor      # проверить интеграции и что реально видит Keitaro
 python -m app.cli social-add "Камилла"          # аккаунт из мультитокена
+python -m app.cli import-accounts               # завести кабинеты токена пачкой
 python -m app.cli find-field --account 123      # подобрать sub_id с ID адсетов
 python -m app.cli fb-accounts # кабинеты, доступные токену
 python -m app.cli import-adsets --account 123  # поставить адсеты кабинета под контроль
