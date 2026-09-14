@@ -163,6 +163,9 @@ class FacebookClient:
             raise FacebookError(
                 f"Facebook недоступен: {exc}", kind="transport"
             ) from exc
+        except ValueError as exc:
+            # Например, неподдерживаемая схема прокси — httpx падает на создании.
+            raise FacebookError(f"неверный прокси: {exc}", kind="transport") from exc
 
         try:
             body = response.json()
@@ -344,9 +347,7 @@ class FacebookClient:
                 if response.status_code < 400:
                     return str(response.json().get("ip", ""))
         except (httpx.HTTPError, ValueError) as exc:
-            raise FacebookError(
-                f"прокси не работает: {exc}", kind="transport"
-            ) from exc
+            raise FacebookError(f"прокси не работает: {exc}", kind="transport") from exc
         return ""
 
     def refresh_token_from_cookies(self) -> str:

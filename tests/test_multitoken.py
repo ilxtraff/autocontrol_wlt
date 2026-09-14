@@ -106,3 +106,41 @@ def test_describe_hides_secrets():
 
 def test_cookie_string_keeps_only_session_cookies():
     assert normalize_cookies("c_user=1; xs=2; some_ad_tracker=3") == "c_user=1; xs=2"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("socks5://1.2.3.4:1080", "socks5://1.2.3.4:1080"),
+        ("socks5h://1.2.3.4:1080", "socks5h://1.2.3.4:1080"),
+        ("socks5://user:pass@h.example:1080", "socks5://user:pass@h.example:1080"),
+        ("SOCKS5://1.2.3.4:1080", "socks5://1.2.3.4:1080"),
+    ],
+)
+def test_socks5_forms(raw, expected):
+    assert normalize_proxy(raw) == expected
+
+
+@pytest.mark.parametrize("scheme", ["socks4", "socks4a", "ftp", "ssh"])
+def test_unsupported_proxy_schemes_are_refused(scheme):
+    """httpx их не умеет — отсекаем при вводе, а не при первом запросе."""
+    with pytest.raises(MultitokenError, match="не поддерживается"):
+        normalize_proxy(f"{scheme}://1.2.3.4:1080")
+
+
+def test_socks5_inside_multitoken():
+    mt = parse_multitoken(f"{TOKEN}|{COOKIES}|socks5://bob:sec@1.2.3.4:1080")
+    assert mt.proxy == "socks5://bob:sec@1.2.3.4:1080"
+
+
+def test_socks5_survives_a_real_httpx_client():
+    """Схема должна быть принята самим httpx, иначе упадём в бою."""
+    import httpx
+
+    client = httpx.Client(proxy=normalize_proxy("socks5://1.2.3.4:1080"))
+    client.close()
+
+
+def test_bare_host_port_defaults_to_http():
+    """Без схемы угадать socks нельзя — считаем http и требуем явную схему."""
+    assert normalize_proxy("1.2.3.4:1080") == "http://1.2.3.4:1080"

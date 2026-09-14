@@ -128,3 +128,15 @@ def test_network_failure_is_not_blamed_on_the_token(monkeypatch):
     exc = FacebookError("Facebook недоступен: boom", kind="transport")
     assert exc.is_transport_problem
     assert not exc.is_token_problem
+
+
+def test_broken_proxy_scheme_becomes_a_facebook_error():
+    """httpx падает ValueError на создании клиента — наружу это идти не должно."""
+    client = FacebookClient("tok", proxy="socks4://1.2.3.4:1080")
+    with pytest.raises(FacebookError, match="неверный прокси"):
+        client.check_token()
+
+
+def test_socks5_proxy_reaches_the_client():
+    client = FacebookClient("tok", proxy="socks5://bob:sec@1.2.3.4:1080")
+    assert client._client_kwargs()["proxy"] == "socks5://bob:sec@1.2.3.4:1080"

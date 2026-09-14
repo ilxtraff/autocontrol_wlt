@@ -67,6 +67,12 @@
           Запросы пойдут <b>через прокси аккаунта</b>: с чужого IP Facebook быстро выдаёт чекпоинт.
           Куки нужны, чтобы <b>перевыпустить токен без вашего участия</b>, когда он протухнет.
           Секреты хранятся в базе зашифрованными.
+          <br>
+          Прокси: <span class="mono">host:port</span>,
+          <span class="mono">host:port:user:pass</span>,
+          <span class="mono">user:pass@host:port</span> — это HTTP.
+          Для SOCKS схему нужно указать явно:
+          <span class="mono">socks5://user:pass@host:port</span>.
         </p>
         <div class="scroll">
           <table>
@@ -115,7 +121,7 @@
                       </div>
                       <div class="field" style="min-width:200px">
                         <label>Прокси отдельно</label>
-                        <input class="mono" name="proxy" form="s{{ s.id }}" placeholder="host:port:user:pass">
+                        <input class="mono" name="proxy" form="s{{ s.id }}" placeholder="host:port:user:pass или socks5://...">
                       </div>
                     </div>
                   </td>
@@ -141,7 +147,7 @@
           </div>
           <div class="field" style="min-width:200px">
             <label>Прокси, если его нет в мультитокене</label>
-            <input class="mono" name="proxy" placeholder="host:port:user:pass">
+            <input class="mono" name="proxy" placeholder="host:port:user:pass или socks5://...">
           </div>
           <button class="primary" type="submit">Добавить</button>
         </form>

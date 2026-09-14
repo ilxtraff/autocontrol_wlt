@@ -15,7 +15,10 @@ from dataclasses import dataclass, field
 # Токены Graph API начинаются с EAA; у страничных и системных префикс тот же.
 _TOKEN_RE = re.compile(r"\bEAA[A-Za-z0-9_\-]{20,}\b")
 _UID_RE = re.compile(r"^\d{5,25}$")
-_PROXY_SCHEME_RE = re.compile(r"^(https?|socks[45]h?)://", re.I)
+_PROXY_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.\-]*)://", re.I)
+# httpx умеет только эти схемы; socks4 он отвергает уже на создании клиента,
+# поэтому отсеиваем его здесь, а не в момент первого запроса.
+_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 _HOSTPORT_RE = re.compile(r"^[\w.\-]+:\d{2,5}$")
 _HOSTPORT_AUTH_RE = re.compile(r"^[\w.\-]+:\d{2,5}:[^:]+:[^:]+$")
 _AUTH_HOSTPORT_RE = re.compile(r"^[^:@/]+:[^:@/]*@[\w.\-]+:\d{2,5}$")
@@ -149,6 +152,11 @@ def normalize_proxy(raw: str) -> str:
     match = _PROXY_SCHEME_RE.match(text)
     if match:
         scheme = match.group(1).lower()
+        if scheme not in _PROXY_SCHEMES:
+            raise MultitokenError(
+                f"схема прокси {scheme} не поддерживается — нужны "
+                f"{', '.join(sorted(_PROXY_SCHEMES))}"
+            )
         text = text[match.end():]
 
     if _AUTH_HOSTPORT_RE.match(text):
@@ -164,8 +172,9 @@ def normalize_proxy(raw: str) -> str:
 
 def looks_like_proxy(part: str) -> bool:
     text = part.strip()
-    if _PROXY_SCHEME_RE.match(text):
-        return True
+    match = _PROXY_SCHEME_RE.match(text)
+    if match:
+        return match.group(1).lower() in _PROXY_SCHEMES
     return bool(
         _AUTH_HOSTPORT_RE.match(text)
         or _HOSTPORT_AUTH_RE.match(text)
