@@ -549,7 +549,7 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
     from app.clients.facebook import FacebookError
     from app.engine import AutocontrolEngine
     from app.models import AdAccount, GeoThreshold, UserGeoThreshold
-    from app.naming import detect_geo
+    from app.naming import detect_geo, geo_candidates
     from app.services import ServiceError, attach_adset
 
     engine = AutocontrolEngine()
@@ -604,7 +604,11 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
                 print("в кабинете нет ни одного адсета — проверьте, тот ли это кабинет")
             return
 
+        from collections import Counter
+
         added = skipped = geo_fail = 0
+        candidate_counts: Counter = Counter()
+        sample_names: list[str] = []
         for item in adsets:
             campaign = item.get("campaign") or {}
             geo = args.geo.upper() if args.geo else detect_geo(
@@ -614,6 +618,11 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
                 print(f"  пропуск  {item.get('name')}: не понял гео")
                 skipped += 1
                 geo_fail += 1
+                # Копим, что в этих именах вообще похоже на гео.
+                for code in geo_candidates(item.get("name"), campaign.get("name")):
+                    candidate_counts[code] += 1
+                if len(sample_names) < 5:
+                    sample_names.append(item.get("name", ""))
                 continue
             if args.dry_run:
                 print(f"  поставил {item.get('name'):34} {geo}")
@@ -639,6 +648,18 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
                 f"у {geo_fail} адсетов гео не распозналось по имени. Задайте всем одно "
                 "через --geo XX либо заведите нужные гео в порогах"
             )
+            known_codes = {c for c in candidate_counts if c in known}
+            new_codes = [(c, n) for c, n in candidate_counts.most_common() if c not in known]
+            if new_codes:
+                shown = ", ".join(f"{c} (×{n})" for c, n in new_codes[:8])
+                print(f"  в именах похоже на гео, но нет в порогах: {shown}")
+                print("  если это гео — заведите их в порогах, и они распознаются сами")
+            elif not candidate_counts:
+                print("  в именах вообще нет двухбуквенных кодов гео — только --geo XX")
+                print(f"  примеры имён: {', '.join(n for n in sample_names if n)}")
+            elif known_codes:
+                # Кандидаты есть и они в порогах — значит имена нестандартные.
+                print(f"  примеры имён: {', '.join(n for n in sample_names if n)}")
         if args.dry_run and added:
             print("это была примерка — повторите без --dry-run")
 

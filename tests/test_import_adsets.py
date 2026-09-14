@@ -100,3 +100,32 @@ def test_active_adsets_are_imported(wired, monkeypatch, capsys):
         rows = s.scalars(select(ControlledAdset)).all()
     assert [r.adset_id for r in rows] == ["9"]
     assert rows[0].geo == "IT"
+
+
+def test_suggests_geos_found_in_names(wired, monkeypatch, capsys):
+    """Гео в именах есть, но не в порогах — команда их называет."""
+    monkeypatch.setattr(
+        fb.FacebookClient, "list_adsets",
+        lambda self, a, statuses=None: [
+            {"id": "1", "name": "zdrave_cz_klouby-D1", "effective_status": "ACTIVE",
+             "campaign": {"name": "[AK47] [cz] zdrave"}},
+            {"id": "2", "name": "t2_sk_joint-R2", "effective_status": "ACTIVE",
+             "campaign": {"name": "[sk] joint"}},
+        ],
+    )
+    out = _run(capsys)
+    assert "нет в порогах: CZ" in out
+    assert "SK" in out
+
+
+def test_no_geo_tokens_shows_sample_names(wired, monkeypatch, capsys):
+    monkeypatch.setattr(
+        fb.FacebookClient, "list_adsets",
+        lambda self, a, statuses=None: [
+            {"id": "1", "name": "promo_final_v2", "effective_status": "ACTIVE",
+             "campaign": {"name": "summer sale"}},
+        ],
+    )
+    out = _run(capsys)
+    assert "нет двухбуквенных кодов" in out
+    assert "promo_final_v2" in out

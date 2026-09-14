@@ -28,3 +28,24 @@ def detect_geo(
             return candidate.upper()
 
     return None
+
+
+# Частые двухбуквенные куски, которые точно не гео — чтобы не предлагать их
+# как кандидатов в пороги.
+_NOT_GEO = {"ad", "fb", "po", "ab", "cbo", "id", "no"}
+
+
+def geo_candidates(adset_name: str | None, campaign_name: str | None) -> list[str]:
+    """Все двухбуквенные куски из имён — кандидаты в гео, без сверки с порогами.
+
+    Нужно для диагностики: показать, что в именах вообще похоже на гео, когда
+    detect_geo вернул None. Порядок — как встретились, дубли убраны.
+    """
+    seen: list[str] = []
+    for text in ((campaign_name or "").lower(), (adset_name or "").lower()):
+        for candidate in _BRACKET.findall(text) + _SEGMENT.findall(text):
+            code = candidate.upper()
+            if candidate in _NOT_GEO or code in seen:
+                continue
+            seen.append(code)
+    return seen

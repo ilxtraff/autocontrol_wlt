@@ -206,3 +206,11 @@ def test_base64_junk_is_refused_cleanly():
     raw = base64.b64encode("\x00\x01\x02 просто байты, не json".encode("utf-8")).decode()
     with pytest.raises(MultitokenError):
         parse_multitoken(raw)
+
+
+def test_geo_candidates_ignores_non_geo_tokens():
+    from app.naming import geo_candidates
+
+    # ad, fb, po — не гео, их предлагать нельзя.
+    assert geo_candidates("ad_fb_promo-D1", "[po] [ad] x") == []
+    assert geo_candidates("x_cz_y", "[sk] z") == ["SK", "CZ"]
