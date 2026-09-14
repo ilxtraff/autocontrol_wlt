@@ -83,21 +83,97 @@ class KeitaroProfile(Base):
 
 
 class SocialAccount(Base):
-    """Социальный аккаунт Facebook — источник токена, которым рулим адсетами."""
+    """Социальный аккаунт Facebook целиком: токен, куки сессии и свой прокси.
+
+    Запросы идут через прокси аккаунта — с чужого IP Facebook быстро выдаёт
+    чекпоинт. Куки нужны не для самих вызовов Graph API (там хватает токена),
+    а чтобы перевыпустить токен, когда он умрёт, без участия человека.
+
+    Секреты лежат в базе зашифрованными: свойства ниже шифруют и расшифровывают
+    их на лету, поэтому в коде с ними работают как с обычными строками.
+    """
 
     __tablename__ = "social_accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(128))
     fb_user_id: Mapped[str] = mapped_column(String(64), default="")
-    access_token: Mapped[str] = mapped_column(Text)
+
+    # Ниже — зашифрованные значения; читать через одноимённые свойства без _enc.
+    access_token_enc: Mapped[str] = mapped_column("access_token", Text, default="")
+    cookies_enc: Mapped[str] = mapped_column("cookies", Text, default="")
+    proxy_enc: Mapped[str] = mapped_column("proxy", Text, default="")
+
+    user_agent: Mapped[str] = mapped_column(Text, default="")
+
     token_status: Mapped[str] = mapped_column(String(32), default="unknown")
     token_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     token_error: Mapped[str] = mapped_column(Text, default="")
+    token_refreshed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    proxy_status: Mapped[str] = mapped_column(String(32), default="unknown")
+    proxy_ip: Mapped[str] = mapped_column(String(64), default="")
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     accounts: Mapped[list["AdAccount"]] = relationship(back_populates="social")
+
+    # ------------------------------------------------------ секреты
+
+    @property
+    def access_token(self) -> str:
+        from app.crypto import decrypt
+
+        return decrypt(self.access_token_enc or "")
+
+    @access_token.setter
+    def access_token(self, value: str) -> None:
+        from app.crypto import encrypt
+
+        self.access_token_enc = encrypt(value or "")
+
+    @property
+    def cookies(self) -> str:
+        from app.crypto import decrypt
+
+        return decrypt(self.cookies_enc or "")
+
+    @cookies.setter
+    def cookies(self, value: str) -> None:
+        from app.crypto import encrypt
+
+        self.cookies_enc = encrypt(value or "")
+
+    @property
+    def proxy(self) -> str:
+        from app.crypto import decrypt
+
+        return decrypt(self.proxy_enc or "")
+
+    @proxy.setter
+    def proxy(self, value: str) -> None:
+        from app.crypto import encrypt
+
+        self.proxy_enc = encrypt(value or "")
+
+    @property
+    def has_session(self) -> bool:
+        """Есть ли куки, по которым можно перевыпустить токен."""
+        cookies = self.cookies
+        return "c_user=" in cookies and "xs=" in cookies
+
+    @property
+    def token_tail(self) -> str:
+        from app.crypto import mask
+
+        return mask(self.access_token)
+
+    @property
+    def proxy_label(self) -> str:
+        """Прокси без логина и пароля — для интерфейса."""
+        from app.multitoken import _mask_proxy
+
+        return _mask_proxy(self.proxy)
 
 
 class AdAccount(Base):

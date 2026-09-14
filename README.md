@@ -107,10 +107,10 @@ python -m app.engine
 
 1. **Keitaro** — адрес трекера, API-ключ, таймзона (`Europe/Moscow`) и поле, в
    котором лежит ID адсета (`sub_id_6`, если параметр `adset_id` замаплен туда).
-2. **Социальный аккаунт Facebook** — токен **профиля**, которым движок управляет
-   адсетами; нужны права `ads_management` и `ads_read`. Токен системного
-   пользователя не подойдёт: у него нет пути `me/adaccounts`, Facebook ответит
-   `Invalid request. (#100)`. Проверить, что за токен вставлен, —
+2. **Социальный аккаунт Facebook** — мультитокен: токен, куки, прокси и
+   user-agent одной вставкой. Запросы идут через прокси аккаунта, а куки
+   позволяют перевыпустить протухший токен без участия человека. Создавать
+   приложение на developers.facebook.com не нужно. Проверить —
    `python -m app.cli fb-accounts`.
 3. **Рекламный кабинет** — ID, токен и трекер. Таймзону можно не указывать:
    она подтянется из Facebook по токену, а именно от неё считаются сутки.
@@ -143,6 +143,9 @@ python -m app.engine
 | `AC_KEITARO_ADSET_FIELD` | `sub_id_6` | поле с ID адсета |
 | `AC_DRY_RUN` | `false` | считать и писать журнал, но ничего не выключать |
 
+`AC_SECRET_KEY` шифрует мультитокены в базе — менять его нельзя, иначе
+сохранённые секреты станут нечитаемы.
+
 `AC_DRY_RUN=true` — хороший способ посмотреть на решения движка, прежде чем дать
 ему трогать боевые адсеты.
 
@@ -155,6 +158,7 @@ python -m app.cli createuser sasha --role buyer   # роли: buyer, admin, ceo
 python -m app.cli passwd sasha
 python -m app.cli users
 python -m app.cli doctor      # проверить интеграции и что реально видит Keitaro
+python -m app.cli social-add "Камилла"          # аккаунт из мультитокена
 python -m app.cli find-field --account 123      # подобрать sub_id с ID адсетов
 python -m app.cli fb-accounts # кабинеты, доступные токену
 python -m app.cli import-adsets --account 123  # поставить адсеты кабинета под контроль

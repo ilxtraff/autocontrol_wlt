@@ -74,11 +74,53 @@ def cmd_tick(_: argparse.Namespace) -> None:
     print(report.as_dict())
 
 
+def cmd_social_add(args: argparse.Namespace) -> None:
+    """Заводит социальный аккаунт из мультитокена."""
+    from app.models import SocialAccount
+    from app.multitoken import MultitokenError, normalize_proxy, parse_multitoken
+
+    raw = args.multitoken
+    if not raw:
+        # Просим ввод, а не аргумент: так секрет не осядет в истории команд.
+        raw = getpass.getpass("Мультитокен (ввод скрыт): ")
+    try:
+        parsed = parse_multitoken(raw)
+        if args.proxy:
+            parsed.proxy = normalize_proxy(args.proxy)
+    except MultitokenError as exc:
+        sys.exit(str(exc))
+
+    print(f"разобрано: {parsed.describe()}")
+    if not parsed.proxy:
+        print("  прокси нет — запросы пойдут с IP сервера; это заметно повышает риск чекпоинта")
+    if not parsed.has_session:
+        print("  кук сессии нет — токен не получится перевыпустить автоматически")
+
+    with session_scope() as session:
+        social = session.scalar(select(SocialAccount).where(SocialAccount.title == args.title))
+        if social is None:
+            social = SocialAccount(title=args.title)
+            session.add(social)
+        if parsed.access_token:
+            social.access_token = parsed.access_token
+        if parsed.cookies:
+            social.cookies = parsed.cookies
+        if parsed.user_agent:
+            social.user_agent = parsed.user_agent
+        if parsed.proxy:
+            social.proxy = parsed.proxy
+        if parsed.uid:
+            social.fb_user_id = parsed.uid
+        social.token_status = "unknown"
+        social.proxy_status = "unknown"
+    print(f"аккаунт «{args.title}» сохранён. Проверьте: python -m app.cli fb-accounts")
+
+
 def cmd_doctor(_: argparse.Namespace) -> None:
     """Проверяет всё, что нужно движку, и показывает, что реально видит Keitaro."""
     from datetime import datetime, timezone
 
-    from app.clients.facebook import FacebookClient, FacebookError
+    from app.clients.facebook import FacebookError, client_for_social
     from app.clients.keitaro import KeitaroClient, KeitaroError
     from app.config import get_settings
     from app.engine import AutocontrolEngine
@@ -118,10 +160,33 @@ def cmd_doctor(_: argparse.Namespace) -> None:
             print("  нет ни одного токена — добавьте на странице «Интеграции»")
             problems += 1
         for social in socials:
-            client = FacebookClient(
-                social.access_token, settings.fb_api_version, settings.fb_timeout
-            )
+            client = client_for_social(social, settings)
+
+            if social.proxy:
+                try:
+                    social.proxy_ip = client.check_proxy()
+                    social.proxy_status = "ok" if social.proxy_ip else "unknown"
+                    print(
+                        f"  [ок]     {social.title}: прокси {social.proxy_label}"
+                        f" · выход {social.proxy_ip or '—'}"
+                    )
+                except FacebookError as exc:
+                    social.proxy_status = "invalid"
+                    print(f"  [ОШИБКА] {social.title}: {exc}")
+                    problems += 1
+                    continue
+            else:
+                print(
+                    f"  [!]      {social.title}: прокси не задан — запросы идут с IP сервера"
+                )
+
             token = client.describe_token()
+            if token["error"] and social.has_session:
+                print("           токен не отвечает, пробую перевыпустить из кук…")
+                if engine.refresh_token(social):
+                    print("           токен перевыпущен")
+                    client = client_for_social(social, settings)
+                    token = client.describe_token()
             if token["error"]:
                 print(f"  [ОШИБКА] {social.title}: {token['error']}")
                 if token["hint"]:
@@ -300,7 +365,7 @@ def cmd_find_field(args: argparse.Namespace) -> None:
 
 def cmd_fb_accounts(args: argparse.Namespace) -> None:
     """Кабинеты, доступные токену: откуда взять ID и таймзону."""
-    from app.clients.facebook import FacebookClient, FacebookError
+    from app.clients.facebook import FacebookError, client_for_social
     from app.config import get_settings
     from app.models import SocialAccount, utcnow
 
@@ -314,11 +379,30 @@ def cmd_fb_accounts(args: argparse.Namespace) -> None:
 
         for social in socials:
             print(f"== {social.title} ==")
-            client = FacebookClient(
-                social.access_token, settings.fb_api_version, settings.fb_timeout
-            )
+            client = client_for_social(social, settings)
+
+            if social.proxy:
+                try:
+                    ip = client.check_proxy()
+                    social.proxy_ip = ip
+                    social.proxy_status = "ok" if ip else "unknown"
+                    print(f"  прокси {social.proxy_label} · выход {ip or '—'}")
+                except FacebookError as exc:
+                    social.proxy_status = "invalid"
+                    print(f"  прокси не работает: {exc}")
+                    continue
+            else:
+                print("  прокси не задан — запросы идут с IP сервера")
 
             token = client.describe_token()
+            if token["error"] and social.has_session:
+                from app.engine import AutocontrolEngine
+
+                print("  токен не отвечает, пробую перевыпустить из кук…")
+                if AutocontrolEngine().refresh_token(social):
+                    print("  токен перевыпущен из кук")
+                    client = client_for_social(social, settings)
+                    token = client.describe_token()
             if token["error"]:
                 print(f"  не удалось проверить: {token['error']}")
                 if token["hint"]:
@@ -471,6 +555,12 @@ def main() -> None:
     sub.add_parser("doctor", help="проверить интеграции и что видит Keitaro").set_defaults(
         func=cmd_doctor
     )
+
+    p = sub.add_parser("social-add", help="завести аккаунт из мультитокена")
+    p.add_argument("title", help="название аккаунта, например Камилла")
+    p.add_argument("--multitoken", help="лучше не передавать — спросим скрытым вводом")
+    p.add_argument("--proxy", help="прокси, если его нет в мультитокене")
+    p.set_defaults(func=cmd_social_add)
 
     p = sub.add_parser("find-field", help="подобрать sub_id с ID адсетов")
     p.add_argument("--account", required=True, help="ID рекламного кабинета")

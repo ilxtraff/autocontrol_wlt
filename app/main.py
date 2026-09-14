@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_session, init_db, session_scope
 from app.deps import current_user, current_user_optional, require_global_editor
+from app.clients.facebook import FacebookError, client_for_social
 from app.engine import AutocontrolEngine
+from app.multitoken import MultitokenError, normalize_proxy, parse_multitoken
 from app.formatting import integer, money, rate, since, when
 from app.models import (
     DECISION_TITLES, ROLE_TITLES, SOURCE_TITLES, STATE_OFF, STATE_PAUSED,
@@ -49,6 +51,11 @@ templates.env.globals["DECISION_TITLES"] = DECISION_TITLES
 templates.env.globals["SOURCE_TITLES"] = SOURCE_TITLES
 templates.env.globals["ROLE_TITLES"] = ROLE_TITLES
 templates.env.globals["RECOVERY_HOURS"] = settings.recovery_hours
+templates.env.globals["PROXY_STATUS"] = {
+    "ok": "РАБОТАЕТ",
+    "unknown": "НЕ ПРОВЕРЕН",
+    "invalid": "НЕ РАБОТАЕТ",
+}
 templates.env.globals["TOKEN_STATUS"] = {
     "ok": "ЖИВОЙ",
     "unknown": "НЕ ПРОВЕРЕН",
@@ -506,20 +513,115 @@ def update_keitaro(
     return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _apply_multitoken(social: SocialAccount, raw: str, proxy_override: str = "") -> None:
+    """Разбирает мультитокен и раскладывает его по полям аккаунта."""
+    try:
+        parsed = parse_multitoken(raw)
+    except MultitokenError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    if parsed.access_token:
+        social.access_token = parsed.access_token
+    if parsed.cookies:
+        social.cookies = parsed.cookies
+    if parsed.user_agent:
+        social.user_agent = parsed.user_agent
+    if parsed.uid:
+        social.fb_user_id = parsed.uid
+
+    proxy = proxy_override.strip()
+    if proxy:
+        try:
+            social.proxy = normalize_proxy(proxy)
+        except MultitokenError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    elif parsed.proxy:
+        social.proxy = parsed.proxy
+
+    social.token_status = "unknown"
+    social.token_error = ""
+    social.proxy_status = "unknown"
+
+
 @app.post("/integrations/social")
 def save_social(
     title: str = Form(...),
-    access_token: str = Form(...),
-    fb_user_id: str = Form(""),
+    multitoken: str = Form(...),
+    proxy: str = Form(""),
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ):
-    session.add(
-        SocialAccount(
-            title=title.strip(), access_token=access_token.strip(),
-            fb_user_id=fb_user_id.strip(),
-        )
-    )
+    """Мультитокен: токен, куки, прокси и user-agent одной вставкой."""
+    social = SocialAccount(title=title.strip())
+    _apply_multitoken(social, multitoken, proxy)
+    session.add(social)
+    session.commit()
+    return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/integrations/social/{social_id}")
+def update_social(
+    social_id: int,
+    title: str = Form(""),
+    multitoken: str = Form(""),
+    proxy: str = Form(""),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    """Правка аккаунта. Пустой мультитокен оставляет прежние секреты."""
+    social = session.get(SocialAccount, social_id)
+    if social is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "аккаунт не найден")
+    if title.strip():
+        social.title = title.strip()
+    if multitoken.strip():
+        _apply_multitoken(social, multitoken, proxy)
+    elif proxy.strip():
+        try:
+            social.proxy = normalize_proxy(proxy)
+        except MultitokenError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        social.proxy_status = "unknown"
+    session.commit()
+    return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/integrations/social/{social_id}/check")
+def check_social(
+    social_id: int,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    """Проверка аккаунта: жив ли прокси, жив ли токен, и починка из кук."""
+    social = session.get(SocialAccount, social_id)
+    if social is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "аккаунт не найден")
+
+    engine = AutocontrolEngine()
+    client = client_for_social(social, settings)
+
+    if social.proxy:
+        try:
+            social.proxy_ip = client.check_proxy()
+            social.proxy_status = "ok" if social.proxy_ip else "unknown"
+        except FacebookError as exc:
+            social.proxy_status = "invalid"
+            social.token_error = str(exc)
+            session.commit()
+            return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+    info = client.describe_token()
+    if info["error"]:
+        social.token_status = "invalid"
+        social.token_error = info["error"]
+        # Куки мультитокена — шанс поднять токен без человека.
+        if engine.refresh_token(social):
+            social.token_error = ""
+    else:
+        social.token_status = "ok"
+        social.token_error = ""
+        social.fb_user_id = social.fb_user_id or info["id"]
+    social.token_checked_at = datetime.now(UTC)
     session.commit()
     return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
 

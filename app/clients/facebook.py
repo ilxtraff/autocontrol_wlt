@@ -1,12 +1,19 @@
 """Клиент Facebook Marketing API.
 
 Нужен ровно для трёх вещей: узнать таймзону кабинета, выключить адсет и
-включить его обратно. Токен берётся из социального аккаунта.
+включить его обратно. Работает от имени социального аккаунта целиком:
+
+  * запросы идут через **прокси аккаунта** — с чужого IP Facebook быстро
+    выдаёт чекпоинт, и никакой автоконтроль это не переживёт;
+  * с тем же **user-agent**, что у браузера аккаунта;
+  * **куки** самим вызовам Graph API не нужны, там хватает токена, но по ним
+    токен перевыпускается, когда протухает.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -74,23 +81,88 @@ class FacebookError(RuntimeError):
         return ""
 
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+# Страницы, на которых у залогиненной сессии обычно лежит рабочий токен.
+_TOKEN_SOURCES = (
+    "https://business.facebook.com/business_locations",
+    "https://business.facebook.com/content_management",
+    "https://www.facebook.com/adsmanager/manage/campaigns",
+)
+
+# Токен на этих страницах встречается в разной обёртке.
+_TOKEN_PATTERNS = (
+    re.compile(r'"accessToken"\s*:\s*"(EAA[A-Za-z0-9_\-]{20,})"'),
+    re.compile(r'access_token=(EAA[A-Za-z0-9_\-]{20,})'),
+    re.compile(r'\bEAA[A-Za-z0-9_\-]{50,}\b'),
+)
+
+
 @dataclass
 class FacebookClient:
     access_token: str
     api_version: str = "v21.0"
     timeout: int = 45
+    proxy: str = ""
+    cookies: str = ""
+    user_agent: str = ""
+    _transport: object = field(default=None, repr=False, compare=False)
 
     def _url(self, path: str) -> str:
         return f"https://graph.facebook.com/{self.api_version}/{path.lstrip('/')}"
+
+    def _safe_user_agent(self) -> str:
+        """Заголовки кодируются в latin-1: не-ASCII user-agent уронил бы запрос.
+
+        Такое прилетает из кривых выгрузок мультитокена, и падать из-за этого
+        всем аккаунтом нельзя — берём дефолтный.
+        """
+        agent = (self.user_agent or "").strip()
+        if not agent:
+            return DEFAULT_USER_AGENT
+        try:
+            agent.encode("latin-1")
+        except UnicodeEncodeError:
+            log.warning("user-agent содержит не-ASCII символы, беру стандартный")
+            return DEFAULT_USER_AGENT
+        return agent
+
+    def _client_kwargs(self) -> dict:
+        kwargs: dict = {
+            "timeout": self.timeout,
+            "headers": {"User-Agent": self._safe_user_agent()},
+            "follow_redirects": True,
+        }
+        if self.proxy:
+            kwargs["proxy"] = self.proxy
+        if self._transport is not None:
+            # Подменённый транспорт в тестах; с ним прокси не нужен.
+            kwargs["transport"] = self._transport
+            kwargs.pop("proxy", None)
+        return kwargs
+
+    def _cookie_jar(self) -> dict[str, str]:
+        jar: dict[str, str] = {}
+        for chunk in (self.cookies or "").split(";"):
+            chunk = chunk.strip()
+            if "=" in chunk:
+                name, _, value = chunk.partition("=")
+                jar[name.strip()] = value.strip()
+        return jar
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         params = kwargs.pop("params", {}) or {}
         params.setdefault("access_token", self.access_token)
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(**self._client_kwargs()) as client:
                 response = client.request(method, self._url(path), params=params, **kwargs)
         except httpx.HTTPError as exc:
-            raise FacebookError(f"Facebook недоступен: {exc}", kind="transport") from exc
+            raise FacebookError(
+                f"Facebook недоступен: {exc}", kind="transport"
+            ) from exc
 
         try:
             body = response.json()
@@ -261,6 +333,62 @@ class FacebookClient:
 
     def check_token(self) -> dict:
         return self._request("GET", "me", params={"fields": "id,name"})
+
+    # ------------------------------------------------------------ прокси и куки
+
+    def check_proxy(self) -> str:
+        """С какого IP Facebook видит наши запросы. Пустая строка — не узнали."""
+        try:
+            with httpx.Client(**self._client_kwargs()) as client:
+                response = client.get("https://api.ipify.org", params={"format": "json"})
+                if response.status_code < 400:
+                    return str(response.json().get("ip", ""))
+        except (httpx.HTTPError, ValueError) as exc:
+            raise FacebookError(
+                f"прокси не работает: {exc}", kind="transport"
+            ) from exc
+        return ""
+
+    def refresh_token_from_cookies(self) -> str:
+        """Достаёт свежий токен из залогиненной сессии.
+
+        Способ держится на вёрстке страниц Facebook и может отвалиться, когда
+        они её поменяют. Это запасной путь на случай протухшего токена, а не
+        основной механизм: пустая строка означает «не вышло, нужен человек».
+        """
+        if not self.cookies:
+            return ""
+
+        jar = self._cookie_jar()
+        for url in _TOKEN_SOURCES:
+            try:
+                with httpx.Client(**self._client_kwargs()) as client:
+                    response = client.get(url, cookies=jar)
+            except httpx.HTTPError as exc:
+                log.debug("не удалось открыть %s: %s", url, exc)
+                continue
+            if response.status_code >= 400:
+                continue
+            body = response.text
+            for pattern in _TOKEN_PATTERNS:
+                found = pattern.search(body)
+                if found:
+                    token = found.group(1) if found.groups() else found.group(0)
+                    log.info("токен перевыпущен из кук через %s", url)
+                    return token
+        return ""
+
+
+def client_for_social(social, settings) -> FacebookClient:
+    """Строит клиент из социального аккаунта: токен, куки, прокси, user-agent."""
+    return FacebookClient(
+        access_token=social.access_token,
+        api_version=settings.fb_api_version,
+        timeout=settings.fb_timeout,
+        proxy=social.proxy,
+        cookies=social.cookies,
+        user_agent=social.user_agent,
+    )
 
 
 def _act(account_id: str) -> str:

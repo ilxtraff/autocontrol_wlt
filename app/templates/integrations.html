@@ -56,40 +56,83 @@
     <div class="panel">
       <h2>Социальные аккаунты Facebook</h2>
       <div class="panel-body">
+        <p class="hint" style="margin:0 0 14px">
+          Вставьте <b>мультитокен</b> — из него разберутся токен, куки, прокси и user-agent.
+          Запросы пойдут <b>через прокси аккаунта</b>: с чужого IP Facebook быстро выдаёт чекпоинт.
+          Куки нужны, чтобы <b>перевыпустить токен без вашего участия</b>, когда он протухнет.
+          Секреты хранятся в базе зашифрованными.
+        </p>
         <div class="scroll">
           <table>
-            <thead><tr><th>Название</th><th>FB User ID</th><th>Токен</th><th>Состояние</th><th>Проверен</th><th>Кабинетов</th></tr></thead>
+            <thead><tr>
+              <th>Название</th><th>UID</th><th>Токен</th><th>Куки</th>
+              <th>Прокси</th><th>Состояние</th><th>Проверен</th><th>Каб.</th><th></th>
+            </tr></thead>
             <tbody>
               {% for s in socials %}
                 <tr>
-                  <td>{{ s.title }}</td>
+                  <td><input name="title" form="s{{ s.id }}" value="{{ s.title }}"></td>
                   <td class="mono sub">{{ s.fb_user_id or '—' }}</td>
-                  <td class="sub">…{{ s.access_token[-6:] }}</td>
+                  <td class="sub mono">{{ s.token_tail }}</td>
+                  <td class="sub">{{ 'есть' if s.has_session else '—' }}</td>
+                  <td class="sub mono">
+                    {{ s.proxy_label }}
+                    {% if s.proxy_ip %}<div class="sub">выход {{ s.proxy_ip }}</div>{% endif %}
+                  </td>
                   <td>
                     <span class="state {{ 'watching' if s.token_status == 'ok' else ('off' if s.token_status == 'unknown' else 'paused') }}">
                       {{ TOKEN_STATUS.get(s.token_status, s.token_status) }}
                     </span>
-                    {% if s.token_error %}<div class="sub" style="color:var(--red)">{{ s.token_error[:120] }}</div>{% endif %}
+                    {% if s.proxy and s.proxy_status != 'ok' %}
+                      <div class="sub">прокси: {{ PROXY_STATUS.get(s.proxy_status, s.proxy_status) }}</div>
+                    {% endif %}
+                    {% if s.token_error %}<div class="sub" style="color:var(--red)">{{ s.token_error[:110] }}</div>{% endif %}
                   </td>
-                  <td class="num sub">{{ s.token_checked_at|when }}</td>
+                  <td class="num sub">
+                    {{ s.token_checked_at|when }}
+                    {% if s.token_refreshed_at %}<div class="sub">обновлён {{ s.token_refreshed_at|when }}</div>{% endif %}
+                  </td>
                   <td class="num">{{ s.accounts|length }}</td>
+                  <td style="white-space:nowrap">
+                    <button class="tiny primary" type="submit" form="c{{ s.id }}">Проверить</button>
+                    <button class="tiny" type="submit" form="s{{ s.id }}">Сохранить</button>
+                  </td>
+                </tr>
+                <tr>
+                  <td colspan="9" style="padding-top:0">
+                    <div class="row-form">
+                      <div class="field" style="flex:1;min-width:320px">
+                        <label>Новый мультитокен — пусто, если менять не нужно</label>
+                        <input name="multitoken" form="s{{ s.id }}" placeholder="токен|куки|прокси|user-agent">
+                      </div>
+                      <div class="field" style="min-width:200px">
+                        <label>Прокси отдельно</label>
+                        <input class="mono" name="proxy" form="s{{ s.id }}" placeholder="host:port:user:pass">
+                      </div>
+                    </div>
+                  </td>
                 </tr>
               {% else %}
-                <tr><td colspan="6" class="empty">Токенов нет</td></tr>
+                <tr><td colspan="9" class="empty">Аккаунтов нет</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
-        <p class="hint" style="margin:14px 0 0">
-          Нужен <b>токен профиля</b> — того самого социального аккаунта, под которым
-          ведутся кабинеты. Токен системного пользователя сюда не подходит: у него нет
-          доступа к кабинетам через профиль. Проверить, что за токен вы вставили:
-          <span class="mono">python -m app.cli fb-accounts</span>.
-        </p>
-        <form method="post" action="/integrations/social" class="row-form" style="margin-top:16px">
-          <div class="field"><label>Название</label><input name="title" placeholder="Maria Gorbunova" required></div>
-          <div class="field"><label>FB User ID</label><input name="fb_user_id" placeholder="необязательно"></div>
-          <div class="field" style="min-width:280px"><label>Access token</label><input name="access_token" required></div>
+        {% for s in socials %}
+          <form id="s{{ s.id }}" method="post" action="/integrations/social/{{ s.id }}" hidden></form>
+          <form id="c{{ s.id }}" method="post" action="/integrations/social/{{ s.id }}/check" hidden></form>
+        {% endfor %}
+
+        <form method="post" action="/integrations/social" class="row-form" style="margin-top:18px">
+          <div class="field"><label>Название</label><input name="title" placeholder="Камилла" required></div>
+          <div class="field" style="flex:1;min-width:340px">
+            <label>Мультитокен</label>
+            <input name="multitoken" placeholder="токен|куки|прокси|user-agent или JSON" required>
+          </div>
+          <div class="field" style="min-width:200px">
+            <label>Прокси, если его нет в мультитокене</label>
+            <input class="mono" name="proxy" placeholder="host:port:user:pass">
+          </div>
           <button class="primary" type="submit">Добавить</button>
         </form>
       </div>

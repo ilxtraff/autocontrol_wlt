@@ -22,13 +22,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.clients.facebook import STATUS_ACTIVE, FacebookClient, FacebookError
+from app.clients.facebook import STATUS_ACTIVE, FacebookClient, FacebookError, client_for_social
 from app.clients.keitaro import KeitaroClient, KeitaroError
 from app.config import Settings, get_settings
 from app.models import (
     DECISION_ERROR, DECISION_HUMAN_RESUMED, DECISION_PAUSED, DECISION_RELEASED,
     DECISION_RESUMED, STATE_PAUSED, STATE_RELEASED, STATE_WATCHING, AdAccount,
-    ControlledAdset, Decision, utcnow,
+    ControlledAdset, Decision, SocialAccount, utcnow,
 )
 from app.rules import RULE_TITLES, Breach, Metrics, evaluate
 from app.tzwindow import DayWindow, UnknownTimezone, day_window
@@ -52,6 +52,7 @@ class TickReport:
     resumed: int = 0
     released: int = 0
     human_resumed: int = 0
+    tokens_refreshed: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -62,6 +63,7 @@ class TickReport:
             "resumed": self.resumed,
             "released": self.released,
             "human_resumed": self.human_resumed,
+            "tokens_refreshed": self.tokens_refreshed,
             "errors": self.errors,
         }
 
@@ -141,14 +143,40 @@ class AutocontrolEngine:
         )
 
     def facebook_for(self, account: AdAccount) -> FacebookClient:
+        """Клиент от имени социального аккаунта: его токен, куки и прокси."""
         social = account.social
-        if social is None or not social.access_token:
-            raise FacebookError(f"кабинету {account.title or account.account_id} не привязан токен")
-        return FacebookClient(
-            access_token=social.access_token,
-            api_version=self.settings.fb_api_version,
-            timeout=self.settings.fb_timeout,
-        )
+        if social is None:
+            raise FacebookError(
+                f"кабинету {account.title or account.account_id} не привязан аккаунт"
+            )
+        if not social.access_token and not social.has_session:
+            raise FacebookError(
+                f"у аккаунта {social.title} нет ни токена, ни кук — вставьте мультитокен"
+            )
+        return client_for_social(social, self.settings)
+
+    def refresh_token(self, social: SocialAccount) -> bool:
+        """Перевыпускает токен из кук. True — получилось.
+
+        Токен профиля живёт 60 дней, и без этого автоконтроль вставал бы до
+        прихода человека. Куки мультитокена позволяют обойтись без него.
+        """
+        if not social.has_session:
+            return False
+        try:
+            fresh = client_for_social(social, self.settings).refresh_token_from_cookies()
+        except FacebookError as exc:
+            log.warning("не удалось перевыпустить токен %s: %s", social.title, exc)
+            return False
+        if not fresh or fresh == social.access_token:
+            return False
+        social.access_token = fresh
+        social.token_status = "ok"
+        social.token_error = ""
+        social.token_refreshed_at = utcnow()
+        social.token_checked_at = utcnow()
+        log.info("токен %s перевыпущен из кук", social.title)
+        return True
 
     # ---------------------------------------------------------------- главный
 
@@ -199,6 +227,13 @@ class AutocontrolEngine:
         group: list[ControlledAdset],
         report: TickReport,
     ) -> None:
+        social = account.social
+        if social is not None and social.token_status == "invalid" and social.has_session:
+            # Токен уже помечен мёртвым — пробуем поднять его из кук до того,
+            # как упрёмся в ту же ошибку снова.
+            if self.refresh_token(social):
+                report.tokens_refreshed += 1
+
         keitaro = self.keitaro_for(account)
         now = self.now()
 
@@ -232,14 +267,27 @@ class AutocontrolEngine:
         if self.settings.human_resume_check:
             self._check_human_resume(session, account, group, report)
 
-    def _note_token_problem(self, account: AdAccount, exc: FacebookError) -> None:
-        """Протухший токен молча останавливает весь автоконтроль — помечаем его."""
+    def _note_token_problem(self, account: AdAccount, exc: FacebookError) -> bool:
+        """Помечает протухший токен и пробует поднять его из кук.
+
+        True — токен обновлён, вызов имеет смысл повторить.
+        """
         social = account.social
         if social is None or not exc.is_token_problem:
-            return
+            return False
         social.token_status = "invalid"
         social.token_error = str(exc)
         social.token_checked_at = utcnow()
+        return self.refresh_token(social)
+
+    def _with_token_retry(self, account: AdAccount, call):
+        """Выполняет вызов; если токен протух — обновляет его и повторяет один раз."""
+        try:
+            return call(self.facebook_for(account))
+        except FacebookError as exc:
+            if not self._note_token_problem(account, exc):
+                raise
+            return call(self.facebook_for(account))
 
     # ------------------------------------------------------------- решения
 
@@ -290,10 +338,9 @@ class AutocontrolEngine:
     ) -> None:
         try:
             if not self.settings.dry_run:
-                self.facebook_for(account).pause_adset(adset.adset_id)
+                self._with_token_retry(account, lambda fb: fb.pause_adset(adset.adset_id))
         except FacebookError as exc:
             adset.last_error = str(exc)
-            self._note_token_problem(account, exc)
             record_decision(
                 session, adset, DECISION_ERROR, metrics=metrics, breach=breach,
                 note=f"не удалось выключить: {exc}", window=window,
@@ -326,10 +373,9 @@ class AutocontrolEngine:
     ) -> None:
         try:
             if not self.settings.dry_run:
-                self.facebook_for(account).resume_adset(adset.adset_id)
+                self._with_token_retry(account, lambda fb: fb.resume_adset(adset.adset_id))
         except FacebookError as exc:
             adset.last_error = str(exc)
-            self._note_token_problem(account, exc)
             record_decision(
                 session, adset, DECISION_ERROR, metrics=metrics,
                 note=f"не удалось включить обратно: {exc}", window=window,
