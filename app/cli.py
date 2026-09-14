@@ -161,6 +161,35 @@ def cmd_doctor(_: argparse.Namespace) -> None:
                 problems += 1
                 continue
 
+            field = (account.keitaro.adset_field if account.keitaro
+                     else settings.keitaro_adset_field)
+            if all(m.unique_clicks == 0 and m.spend == 0 for m in metrics.values()):
+                print(f"  {label}: по полю {field} трекер не отдал ничего — ищу верное поле…")
+                try:
+                    candidates = engine.keitaro_for(account).probe_adset_field(
+                        window, [a.adset_id for a in adsets]
+                    )
+                except KeitaroError as exc:
+                    candidates = []
+                    print(f"           не смог проверить: {exc}")
+                if candidates:
+                    print(
+                        f"           [ВАЖНО] ID адсетов лежат в {', '.join(candidates)}, "
+                        f"а не в {field}."
+                    )
+                    print(
+                        "           Поправьте «Поле с ID адсета» на «Интеграциях» "
+                        "и повторите doctor."
+                    )
+                    problems += 1
+                else:
+                    print(
+                        "           ни в одном sub_id трекер не знает эти ID: проверьте,\n"
+                        "           что в ссылке есть adset_id={{adset.id}} и что трафик уже шёл."
+                    )
+                    problems += 1
+                continue
+
             print(f"  {label}:")
             for adset in adsets:
                 row = metrics.get(adset.adset_id)
@@ -184,6 +213,51 @@ def cmd_doctor(_: argparse.Namespace) -> None:
         "Если расход и уники везде нулевые, а трафик идёт — значит, Keitaro не получает\n"
         "расход или ID адсета. Проверьте макрос в ссылке и передачу расхода."
     )
+
+
+def cmd_find_field(args: argparse.Namespace) -> None:
+    """Подбирает sub_id, в котором Keitaro хранит ID адсетов."""
+    from datetime import datetime, timezone
+
+    from app.clients.keitaro import KeitaroError
+    from app.engine import AutocontrolEngine
+    from app.models import AdAccount, ControlledAdset
+    from app.tzwindow import day_window
+
+    engine = AutocontrolEngine()
+    with session_scope() as session:
+        account = session.scalar(
+            select(AdAccount).where(AdAccount.account_id == args.account.removeprefix("act_"))
+        )
+        if account is None:
+            sys.exit(f"кабинет {args.account} не заведён")
+
+        ids = args.adset or [
+            a.adset_id for a in session.scalars(
+                select(ControlledAdset).where(ControlledAdset.account_pk == account.id).limit(10)
+            ).all()
+        ]
+        if not ids:
+            sys.exit(
+                "нечего искать: укажите --adset <ID> или сначала поставьте адсеты под контроль"
+            )
+
+        window = day_window(account.timezone_name, now=datetime.now(timezone.utc))
+        print(f"ищу ID адсетов {', '.join(ids[:5])} за сутки {window.account_day}…")
+        try:
+            found = engine.keitaro_for(account).probe_adset_field(window, ids)
+        except KeitaroError as exc:
+            sys.exit(f"Keitaro: {exc}")
+
+    if not found:
+        print(
+            "ни в одном sub_id этих ID нет.\n"
+            "Проверьте, что в ссылке есть adset_id={{adset.id}}, что параметр\n"
+            "замаплен на sub_id в настройках трекера и что по этим адсетам уже был трафик."
+        )
+        sys.exit(1)
+    print(f"нашёл в: {', '.join(found)}")
+    print("Впишите это в «Поле с ID адсета» на странице «Интеграции».")
 
 
 def cmd_fb_accounts(args: argparse.Namespace) -> None:
@@ -310,6 +384,11 @@ def main() -> None:
     sub.add_parser("doctor", help="проверить интеграции и что видит Keitaro").set_defaults(
         func=cmd_doctor
     )
+
+    p = sub.add_parser("find-field", help="подобрать sub_id с ID адсетов")
+    p.add_argument("--account", required=True, help="ID рекламного кабинета")
+    p.add_argument("--adset", action="append", help="ID адсета для поиска, можно несколько")
+    p.set_defaults(func=cmd_find_field)
 
     p = sub.add_parser("fb-accounts", help="кабинеты, доступные токену")
     p.add_argument("--social", help="название или id социального аккаунта")

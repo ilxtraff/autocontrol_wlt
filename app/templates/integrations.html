@@ -14,24 +14,40 @@
     <div class="panel">
       <h2>Keitaro</h2>
       <div class="panel-body">
+        <p class="hint" style="margin:0 0 14px">
+          «Поле адсета» — тот sub_id, на который в настройках Keitaro замаплен
+          параметр <span class="mono">adset_id={{ "{{adset.id}}" }}</span> из ссылки. Номер у всех
+          свой; ошибётесь — движок увидит нули и никого не выключит. Не уверены —
+          <span class="mono">python -m app.cli find-field --account &lt;ID&gt;</span> подберёт сам.
+        </p>
         <div class="scroll">
           <table>
-            <thead><tr><th>Название</th><th>Адрес</th><th>Таймзона</th><th>Поле адсета</th></tr></thead>
+            <thead><tr><th>Название</th><th>Адрес</th><th>Таймзона</th><th>Поле адсета</th><th>Новый ключ</th><th></th></tr></thead>
             <tbody>
               {% for k in keitaro_profiles %}
-                <tr><td>{{ k.title }}</td><td class="mono sub">{{ k.base_url }}</td><td>{{ k.timezone_name }}</td><td class="mono">{{ k.adset_field }}</td></tr>
+                <tr>
+                  <td><input name="title" form="k{{ k.id }}" value="{{ k.title }}"></td>
+                  <td><input class="mono" name="base_url" form="k{{ k.id }}" value="{{ k.base_url }}"></td>
+                  <td><input name="timezone_name" form="k{{ k.id }}" value="{{ k.timezone_name }}"></td>
+                  <td><input class="mono" name="adset_field" form="k{{ k.id }}" value="{{ k.adset_field }}"></td>
+                  <td><input name="api_key" form="k{{ k.id }}" placeholder="не менять"></td>
+                  <td><button class="tiny primary" type="submit" form="k{{ k.id }}">Сохранить</button></td>
+                </tr>
               {% else %}
-                <tr><td colspan="4" class="empty">Трекер не подключён</td></tr>
+                <tr><td colspan="6" class="empty">Трекер не подключён</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
+        {% for k in keitaro_profiles %}
+          <form id="k{{ k.id }}" method="post" action="/integrations/keitaro/{{ k.id }}" hidden></form>
+        {% endfor %}
         <form method="post" action="/integrations/keitaro" class="row-form" style="margin-top:16px">
           <div class="field"><label>Название</label><input name="title" placeholder="Основной" required></div>
           <div class="field"><label>Адрес</label><input name="base_url" placeholder="https://tracker.example.com" required></div>
           <div class="field"><label>API-ключ</label><input name="api_key" required></div>
           <div class="field"><label>Таймзона трекера</label><input name="timezone_name" value="Europe/Moscow"></div>
-          <div class="field"><label>Поле с ID адсета</label><input name="adset_field" value="sub_id_2"></div>
+          <div class="field"><label>Поле с ID адсета</label><input class="mono" name="adset_field" value="sub_id_6"></div>
           <button class="primary" type="submit">Добавить</button>
         </form>
       </div>

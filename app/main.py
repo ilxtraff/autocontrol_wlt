@@ -456,7 +456,7 @@ def save_keitaro(
     base_url: str = Form(...),
     api_key: str = Form(...),
     timezone_name: str = Form("Europe/Moscow"),
-    adset_field: str = Form("sub_id_2"),
+    adset_field: str = Form("sub_id_6"),
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ):
@@ -466,9 +466,35 @@ def save_keitaro(
             base_url=base_url.strip(),
             api_key=api_key.strip(),
             timezone_name=timezone_name.strip() or "Europe/Moscow",
-            adset_field=adset_field.strip() or "sub_id_2",
+            adset_field=adset_field.strip() or "sub_id_6",
         )
     )
+    session.commit()
+    return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/integrations/keitaro/{profile_id}")
+def update_keitaro(
+    profile_id: int,
+    title: str = Form(...),
+    base_url: str = Form(...),
+    api_key: str = Form(""),
+    timezone_name: str = Form("Europe/Moscow"),
+    adset_field: str = Form("sub_id_6"),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    """Правка трекера. Поле с ID адсета здесь меняется чаще всего."""
+    profile = session.get(KeitaroProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "трекер не найден")
+    profile.title = title.strip() or profile.title
+    profile.base_url = base_url.strip() or profile.base_url
+    profile.timezone_name = timezone_name.strip() or profile.timezone_name
+    profile.adset_field = adset_field.strip() or profile.adset_field
+    if api_key.strip():
+        # Пустое поле оставляет ключ прежним, чтобы не перевводить его ради поля.
+        profile.api_key = api_key.strip()
     session.commit()
     return RedirectResponse("/integrations", status_code=status.HTTP_303_SEE_OTHER)
 

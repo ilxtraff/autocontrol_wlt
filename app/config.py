@@ -88,7 +88,7 @@ def get_settings() -> Settings:
         human_resume_check=_bool("AC_HUMAN_RESUME_CHECK", True),
         dry_run=_bool("AC_DRY_RUN", False),
         keitaro_timezone=os.getenv("AC_KEITARO_TIMEZONE", "Europe/Moscow"),
-        keitaro_adset_field=os.getenv("AC_KEITARO_ADSET_FIELD", "sub_id_2"),
+        keitaro_adset_field=os.getenv("AC_KEITARO_ADSET_FIELD", "sub_id_6"),
         keitaro_timeout=_int("AC_KEITARO_TIMEOUT", 45),
         fb_api_version=os.getenv("AC_FB_API_VERSION", "v21.0"),
         fb_timeout=_int("AC_FB_TIMEOUT", 45),

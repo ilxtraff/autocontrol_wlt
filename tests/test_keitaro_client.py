@@ -35,9 +35,9 @@ def test_request_carries_the_account_day_in_moscow_time():
     assert body["range"]["from"] == "2026-09-14 10:00:00"
     assert body["range"]["to"] == "2026-09-14 11:30:00"
     assert body["range"]["timezone"] == "Europe/Moscow"
-    assert body["grouping"] == ["sub_id_2"]
+    assert body["grouping"] == ["sub_id_6"]
     assert body["filters"][0] == {
-        "name": "sub_id_2", "operator": "IN_LIST", "expression": ["1001"]
+        "name": "sub_id_6", "operator": "IN_LIST", "expression": ["1001"]
     }
     assert captured["headers"]["api-key"] == "KEY"
     assert captured["url"] == "https://kt.example.com/admin_api/v1/report/build"
@@ -50,7 +50,7 @@ def test_rows_are_parsed_into_metrics():
             json={
                 "rows": [
                     {
-                        "sub_id_2": "1001", "cost": 6.32, "conversions": 0, "leads": 0,
+                        "sub_id_6": "1001", "cost": 6.32, "conversions": 0, "leads": 0,
                         "sales": 0, "clicks": 90, "campaign_unique_clicks": 77, "revenue": 0,
                     }
                 ]
@@ -72,7 +72,7 @@ def test_rows_are_parsed_into_metrics():
 def test_alternative_metric_names_are_tolerated():
     def handler(request):
         return httpx.Response(
-            200, json={"rows": [{"sub_id_2": "1001", "cost": 3.0, "unique_clicks": 30}]}
+            200, json={"rows": [{"sub_id_6": "1001", "cost": 3.0, "unique_clicks": 30}]}
         )
 
     window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
@@ -113,3 +113,47 @@ def test_empty_id_list_skips_the_request():
     window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
     client = KeitaroClient(base_url="https://kt", api_key="K")
     assert client.fetch_adset_metrics(window, [], client=make_client(handler)) == {}
+
+
+def test_probe_finds_the_field_that_holds_adset_ids():
+    """Номер sub_id зависит от маппинга в трекере — подбираем перебором."""
+    def handler(request):
+        import json
+
+        body = json.loads(request.read().decode())
+        field = body["grouping"][0]
+        if field == "sub_id_6":
+            return httpx.Response(200, json={"rows": [{"sub_id_6": "1001", "clicks": 12}]})
+        return httpx.Response(200, json={"rows": []})
+
+    window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
+    client = KeitaroClient(base_url="https://kt", api_key="K")
+    assert client.probe_adset_field(window, ["1001"], client=make_client(handler)) == ["sub_id_6"]
+
+
+def test_probe_ignores_fields_holding_other_values():
+    """utm_source тоже лежит в каком-то sub_id — он не должен сойти за адсет."""
+    def handler(request):
+        import json
+
+        field = json.loads(request.read().decode())["grouping"][0]
+        if field == "sub_id_2":
+            # Трекер вернул строку, но в ней метка источника, а не наш ID.
+            return httpx.Response(200, json={"rows": [{"sub_id_2": "kly", "clicks": 40}]})
+        if field == "sub_id_6":
+            return httpx.Response(200, json={"rows": [{"sub_id_6": "1001", "clicks": 12}]})
+        return httpx.Response(200, json={"rows": []})
+
+    window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
+    client = KeitaroClient(base_url="https://kt", api_key="K")
+    found = client.probe_adset_field(window, ["1001"], client=make_client(handler))
+    assert found == ["sub_id_6"]
+
+
+def test_probe_returns_nothing_when_ids_are_absent():
+    def handler(request):
+        return httpx.Response(200, json={"rows": []})
+
+    window = day_window("GMT+0", now=datetime(2026, 9, 14, 8, 30, tzinfo=UTC))
+    client = KeitaroClient(base_url="https://kt", api_key="K")
+    assert client.probe_adset_field(window, ["1001"], client=make_client(handler)) == []

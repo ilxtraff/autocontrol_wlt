@@ -73,8 +73,9 @@ class KeitaroProfile(Base):
     base_url: Mapped[str] = mapped_column(String(255))
     api_key: Mapped[str] = mapped_column(String(255))
     timezone_name: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
-    # Поле Keitaro, в котором лежит ID адсета (обычно sub_id_2 из макроса {{adset.id}}).
-    adset_field: Mapped[str] = mapped_column(String(32), default="sub_id_2")
+    # Поле Keitaro, в котором лежит ID адсета. Номер зависит от того, на какой
+    # sub_id в настройках трекера замаплен параметр adset_id из ссылки.
+    adset_field: Mapped[str] = mapped_column(String(32), default="sub_id_6")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

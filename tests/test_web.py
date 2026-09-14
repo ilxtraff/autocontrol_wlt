@@ -143,3 +143,49 @@ def test_logout_clears_session(client):
 
 def test_healthz(client):
     assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_integrations_page_renders(client):
+    """Страница содержит макрос {{adset.id}} как текст — он не должен исполняться."""
+    login(client)
+    response = client.get("/integrations")
+    assert response.status_code == 200
+    assert "Поле с ID адсета" in response.text
+    assert "adset_id={{adset.id}}" in response.text
+    assert "sub_id_6" in response.text
+
+
+def test_keitaro_profile_can_be_edited(client):
+    """Поле с ID адсета меняется в интерфейсе, ключ при этом не теряется."""
+    from sqlalchemy import select
+
+    import app.db as db
+    from app.models import KeitaroProfile
+
+    login(client)
+    client.post(
+        "/integrations/keitaro",
+        data={
+            "title": "Основной", "base_url": "https://kt.example.com", "api_key": "SECRET",
+            "timezone_name": "Europe/Moscow", "adset_field": "sub_id_2",
+        },
+        follow_redirects=False,
+    )
+    with db.SessionLocal() as s:
+        profile = s.scalar(select(KeitaroProfile))
+        assert profile.adset_field == "sub_id_2"
+
+    # Правим только поле, ключ оставляем пустым — он должен уцелеть.
+    response = client.post(
+        f"/integrations/keitaro/{profile.id}",
+        data={
+            "title": "Основной", "base_url": "https://kt.example.com", "api_key": "",
+            "timezone_name": "Europe/Moscow", "adset_field": "sub_id_6",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with db.SessionLocal() as s:
+        updated = s.scalar(select(KeitaroProfile))
+        assert updated.adset_field == "sub_id_6"
+        assert updated.api_key == "SECRET"
