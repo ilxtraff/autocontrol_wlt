@@ -1,51 +1,84 @@
 """Определение гео по именам кампании и адсета.
 
-В именах из CRM гео стоит либо в скобках кампании — `[AK47] [PO] [it] [eblo2_it_ero]`,
-либо отдельным куском имени адсета — `eblo2_it_ero-B4`, `t2in_ro_ero-R2`.
-Берём только те двухбуквенные куски, для которых реально заведён порог, иначе
-любое случайное сочетание букв сошло бы за гео.
+Гео берётся в первую очередь из названия кампании Facebook, затем из имени
+адсета. Понимаются разные написания: код в скобках `[CZ]`, отдельным куском
+`cz` / `_cz_` / `CZ |`, а также названия стран словом («Czech», «Poland»).
+Совпадение засчитывается только если такое гео заведено в порогах — иначе
+случайные две буквы сошли бы за гео.
 """
 from __future__ import annotations
 
 import re
 
 _BRACKET = re.compile(r"\[([a-z]{2})\]")
-_SEGMENT = re.compile(r"(?:^|[_\-])([a-z]{2})(?=[_\-])")
+# Двухбуквенный код на границе слова: пробел, _, -, |, /, скобки, начало/конец.
+_TOKEN = re.compile(r"(?:^|[\s_\-|/([{.,])([a-z]{2})(?=$|[\s_\-|/)\]}.,])")
+
+# Частые двухбуквенные куски, которые точно не гео.
+_NOT_GEO = {"ad", "fb", "po", "ab", "id", "no", "v1", "v2", "wa", "ww"}
+
+# Названия стран → ISO-код. Только то, что реально гоняют в affiliate.
+_COUNTRIES = {
+    "czech": "CZ", "czechia": "CZ", "czech republic": "CZ", "чехия": "CZ",
+    "slovak": "SK", "slovakia": "SK", "словакия": "SK",
+    "poland": "PL", "polska": "PL", "польша": "PL",
+    "hungary": "HU", "венгрия": "HU",
+    "romania": "RO", "румыния": "RO",
+    "italy": "IT", "italia": "IT", "италия": "IT",
+    "spain": "ES", "espana": "ES", "испания": "ES",
+    "germany": "DE", "deutschland": "DE", "германия": "DE",
+    "france": "FR", "франция": "FR",
+    "portugal": "PT", "португалия": "PT",
+    "mexico": "MX", "мексика": "MX",
+    "greece": "GR", "греция": "GR",
+    "bulgaria": "BG", "болгария": "BG",
+    "croatia": "HR", "хорватия": "HR",
+    "austria": "AT", "австрия": "AT",
+    "netherlands": "NL", "нидерланды": "NL",
+    "slovenia": "SI", "словения": "SI",
+    "lithuania": "LT", "latvia": "LV", "estonia": "EE",
+}
+
+
+def _codes_in(text: str | None) -> list[str]:
+    """Все гео-подобные коды из строки: скобки, отдельные куски, названия стран."""
+    text = (text or "").lower()
+    found: list[str] = []
+
+    def add(code: str) -> None:
+        code = code.upper()
+        if code not in found:
+            found.append(code)
+
+    for m in _BRACKET.findall(text):
+        if m not in _NOT_GEO:
+            add(m)
+    for m in _TOKEN.findall(text):
+        if m not in _NOT_GEO:
+            add(m)
+    for name, code in _COUNTRIES.items():
+        if name in text:
+            add(code)
+    return found
 
 
 def detect_geo(
     adset_name: str | None, campaign_name: str | None, known_geos: set[str]
 ) -> str | None:
-    """Гео из имени кампании, затем из имени адсета. None — не распознали."""
+    """Гео из названия кампании, затем из имени адсета. None — не распознали."""
     known = {g.upper() for g in known_geos}
-
-    for candidate in _BRACKET.findall((campaign_name or "").lower()):
-        if candidate.upper() in known:
-            return candidate.upper()
-
-    for candidate in _SEGMENT.findall((adset_name or "").lower()):
-        if candidate.upper() in known:
-            return candidate.upper()
-
+    for source in (campaign_name, adset_name):
+        for code in _codes_in(source):
+            if code in known:
+                return code
     return None
 
 
-# Частые двухбуквенные куски, которые точно не гео — чтобы не предлагать их
-# как кандидатов в пороги.
-_NOT_GEO = {"ad", "fb", "po", "ab", "cbo", "id", "no"}
-
-
 def geo_candidates(adset_name: str | None, campaign_name: str | None) -> list[str]:
-    """Все двухбуквенные куски из имён — кандидаты в гео, без сверки с порогами.
-
-    Нужно для диагностики: показать, что в именах вообще похоже на гео, когда
-    detect_geo вернул None. Порядок — как встретились, дубли убраны.
-    """
-    seen: list[str] = []
-    for text in ((campaign_name or "").lower(), (adset_name or "").lower()):
-        for candidate in _BRACKET.findall(text) + _SEGMENT.findall(text):
-            code = candidate.upper()
-            if candidate in _NOT_GEO or code in seen:
-                continue
-            seen.append(code)
-    return seen
+    """Все гео-подобные коды из имён — для диагностики, без сверки с порогами."""
+    found: list[str] = []
+    for source in (campaign_name, adset_name):
+        for code in _codes_in(source):
+            if code not in found:
+                found.append(code)
+    return found

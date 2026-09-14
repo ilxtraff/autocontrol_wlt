@@ -211,6 +211,6 @@ def test_base64_junk_is_refused_cleanly():
 def test_geo_candidates_ignores_non_geo_tokens():
     from app.naming import geo_candidates
 
-    # ad, fb, po — не гео, их предлагать нельзя.
-    assert geo_candidates("ad_fb_promo-D1", "[po] [ad] x") == []
+    # ad, fb, po, ww — не гео, их предлагать нельзя.
+    assert geo_candidates("ad_fb_promo-D1", "[po] [ad] ww") == []
     assert geo_candidates("x_cz_y", "[sk] z") == ["SK", "CZ"]

@@ -622,7 +622,11 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
                 for code in geo_candidates(item.get("name"), campaign.get("name")):
                     candidate_counts[code] += 1
                 if len(sample_names) < 5:
-                    sample_names.append(item.get("name", ""))
+                    camp = (item.get("campaign") or {}).get("name", "")
+                    sample_names.append(
+                        f"{item.get('name', '')}"
+                        + (f"  ←  кампания: {camp}" if camp else "")
+                    )
                 continue
             if args.dry_run:
                 print(f"  поставил {item.get('name'):34} {geo}")
