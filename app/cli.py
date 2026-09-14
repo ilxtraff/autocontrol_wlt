@@ -82,7 +82,9 @@ def cmd_doctor(_: argparse.Namespace) -> None:
     from app.clients.keitaro import KeitaroClient, KeitaroError
     from app.config import get_settings
     from app.engine import AutocontrolEngine
-    from app.models import AdAccount, ControlledAdset, KeitaroProfile, SocialAccount
+    from app.models import (
+        AdAccount, ControlledAdset, KeitaroProfile, SocialAccount, utcnow,
+    )
     from app.tzwindow import UnknownTimezone, day_window, describe_offset, to_tracker_range
 
     settings = get_settings()
@@ -116,14 +118,50 @@ def cmd_doctor(_: argparse.Namespace) -> None:
             print("  нет ни одного токена — добавьте на странице «Интеграции»")
             problems += 1
         for social in socials:
-            try:
-                who = FacebookClient(
-                    social.access_token, settings.fb_api_version, settings.fb_timeout
-                ).check_token()
-                print(f"  [ок]     {social.title}: живой, {who.get('name')} ({who.get('id')})")
-            except FacebookError as exc:
-                print(f"  [ОШИБКА] {social.title}: {exc}")
+            client = FacebookClient(
+                social.access_token, settings.fb_api_version, settings.fb_timeout
+            )
+            token = client.describe_token()
+            if token["error"]:
+                print(f"  [ОШИБКА] {social.title}: {token['error']}")
+                if token["hint"]:
+                    print(f"           {token['hint']}")
+                if "недоступен" not in token["error"]:
+                    social.token_status = "invalid"
+                    social.token_error = token["error"]
+                    social.token_checked_at = utcnow()
                 problems += 1
+                continue
+
+            print(f"  [ок]     {social.title}: {token['kind']}, {token['name']}")
+            social.token_checked_at = utcnow()
+
+            missing = {"ads_management", "ads_read"} - set(token["permissions"])
+            if token["permissions"] and missing:
+                print(f"           [ВАЖНО] не хватает прав: {', '.join(sorted(missing))}")
+                social.token_status = "no_perms"
+                social.token_error = f"нет прав: {', '.join(sorted(missing))}"
+                problems += 1
+                continue
+
+            accounts_seen, notes = client.list_accounts_verbose()
+            if not accounts_seen:
+                print(f"           [ВАЖНО] токен не видит ни одного кабинета")
+                for note in notes:
+                    print(f"           {note}")
+                if token["kind"] == "токен системного пользователя":
+                    print(
+                        "           Нужен токен самого профиля, а не системного "
+                        "пользователя — шаг 8 в НАСТРОЙКА.md."
+                    )
+                social.token_status = "no_accounts"
+                social.token_error = "; ".join(notes)[:500]
+                problems += 1
+                continue
+
+            social.token_status = "ok"
+            social.token_error = ""
+            print(f"           кабинетов доступно: {len(accounts_seen)}")
 
         print("\n== Кабинеты и сутки ==")
         accounts = session.scalars(select(AdAccount)).all()
@@ -264,7 +302,7 @@ def cmd_fb_accounts(args: argparse.Namespace) -> None:
     """Кабинеты, доступные токену: откуда взять ID и таймзону."""
     from app.clients.facebook import FacebookClient, FacebookError
     from app.config import get_settings
-    from app.models import SocialAccount
+    from app.models import SocialAccount, utcnow
 
     settings = get_settings()
     with session_scope() as session:
@@ -276,16 +314,65 @@ def cmd_fb_accounts(args: argparse.Namespace) -> None:
 
         for social in socials:
             print(f"== {social.title} ==")
+            client = FacebookClient(
+                social.access_token, settings.fb_api_version, settings.fb_timeout
+            )
+
+            token = client.describe_token()
+            if token["error"]:
+                print(f"  не удалось проверить: {token['error']}")
+                if token["hint"]:
+                    print(f"  {token['hint']}")
+                # Сетевой сбой — не повод объявлять токен мёртвым.
+                if "недоступен" not in token["error"]:
+                    social.token_status = "invalid"
+                    social.token_error = token["error"]
+                    social.token_checked_at = utcnow()
+                    print("  Возьмите новый токен профиля — шаг 8 в НАСТРОЙКА.md.")
+                continue
+
+            print(f"  {token['kind']}: {token['name']} ({token['id']})")
+            if token["permissions"]:
+                need = {"ads_management", "ads_read"}
+                missing = need - set(token["permissions"])
+                if missing:
+                    print(f"  [ВАЖНО] не хватает прав: {', '.join(sorted(missing))}")
+                else:
+                    print("  права ads_management и ads_read на месте")
+
             try:
-                accounts = FacebookClient(
-                    social.access_token, settings.fb_api_version, settings.fb_timeout
-                ).list_accounts()
+                accounts, notes = client.list_accounts_verbose()
             except FacebookError as exc:
                 print(f"  ошибка: {exc}")
+                if exc.hint:
+                    print(f"  {exc.hint}")
                 continue
+
+            for note in notes:
+                print(f"  {note}")
+
+            if not accounts:
+                social.token_status = "no_accounts"
+                social.token_error = "; ".join(notes)[:500]
+                social.token_checked_at = utcnow()
+                print("  кабинетов не нашлось.")
+                if token["kind"] == "токен системного пользователя":
+                    print(
+                        "  Это токен системного пользователя. Чтобы работать от имени\n"
+                        "  социального аккаунта, выпустите токен самого профиля —\n"
+                        "  шаг 8 в НАСТРОЙКА.md."
+                    )
+                else:
+                    print("  Проверьте, что у профиля есть доступ к рекламным кабинетам.")
+                continue
+
+            social.token_status = "ok"
+            social.token_error = ""
+            social.token_checked_at = utcnow()
+            print(f"  кабинетов: {len(accounts)}")
             for account in accounts:
                 print(
-                    f"  {account.get('account_id', ''):20} "
+                    f"    {str(account.get('account_id', '')):20} "
                     f"{(account.get('timezone_name') or '—'):26} {account.get('name', '')}"
                 )
 

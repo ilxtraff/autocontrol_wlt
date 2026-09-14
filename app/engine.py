@@ -232,6 +232,15 @@ class AutocontrolEngine:
         if self.settings.human_resume_check:
             self._check_human_resume(session, account, group, report)
 
+    def _note_token_problem(self, account: AdAccount, exc: FacebookError) -> None:
+        """Протухший токен молча останавливает весь автоконтроль — помечаем его."""
+        social = account.social
+        if social is None or not exc.is_token_problem:
+            return
+        social.token_status = "invalid"
+        social.token_error = str(exc)
+        social.token_checked_at = utcnow()
+
     # ------------------------------------------------------------- решения
 
     def _apply(
@@ -284,6 +293,7 @@ class AutocontrolEngine:
                 self.facebook_for(account).pause_adset(adset.adset_id)
         except FacebookError as exc:
             adset.last_error = str(exc)
+            self._note_token_problem(account, exc)
             record_decision(
                 session, adset, DECISION_ERROR, metrics=metrics, breach=breach,
                 note=f"не удалось выключить: {exc}", window=window,
@@ -319,6 +329,7 @@ class AutocontrolEngine:
                 self.facebook_for(account).resume_adset(adset.adset_id)
         except FacebookError as exc:
             adset.last_error = str(exc)
+            self._note_token_problem(account, exc)
             record_decision(
                 session, adset, DECISION_ERROR, metrics=metrics,
                 note=f"не удалось включить обратно: {exc}", window=window,

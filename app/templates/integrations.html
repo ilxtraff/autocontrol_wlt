@@ -58,17 +58,34 @@
       <div class="panel-body">
         <div class="scroll">
           <table>
-            <thead><tr><th>Название</th><th>FB User ID</th><th>Токен</th><th>Кабинетов</th></tr></thead>
+            <thead><tr><th>Название</th><th>FB User ID</th><th>Токен</th><th>Состояние</th><th>Проверен</th><th>Кабинетов</th></tr></thead>
             <tbody>
               {% for s in socials %}
-                <tr><td>{{ s.title }}</td><td class="mono sub">{{ s.fb_user_id or '—' }}</td>
-                    <td class="sub">…{{ s.access_token[-6:] }}</td><td class="num">{{ s.accounts|length }}</td></tr>
+                <tr>
+                  <td>{{ s.title }}</td>
+                  <td class="mono sub">{{ s.fb_user_id or '—' }}</td>
+                  <td class="sub">…{{ s.access_token[-6:] }}</td>
+                  <td>
+                    <span class="state {{ 'watching' if s.token_status == 'ok' else ('off' if s.token_status == 'unknown' else 'paused') }}">
+                      {{ TOKEN_STATUS.get(s.token_status, s.token_status) }}
+                    </span>
+                    {% if s.token_error %}<div class="sub" style="color:var(--red)">{{ s.token_error[:120] }}</div>{% endif %}
+                  </td>
+                  <td class="num sub">{{ s.token_checked_at|when }}</td>
+                  <td class="num">{{ s.accounts|length }}</td>
+                </tr>
               {% else %}
-                <tr><td colspan="4" class="empty">Токенов нет</td></tr>
+                <tr><td colspan="6" class="empty">Токенов нет</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
+        <p class="hint" style="margin:14px 0 0">
+          Нужен <b>токен профиля</b> — того самого социального аккаунта, под которым
+          ведутся кабинеты. Токен системного пользователя сюда не подходит: у него нет
+          доступа к кабинетам через профиль. Проверить, что за токен вы вставили:
+          <span class="mono">python -m app.cli fb-accounts</span>.
+        </p>
         <form method="post" action="/integrations/social" class="row-form" style="margin-top:16px">
           <div class="field"><label>Название</label><input name="title" placeholder="Maria Gorbunova" required></div>
           <div class="field"><label>FB User ID</label><input name="fb_user_id" placeholder="необязательно"></div>

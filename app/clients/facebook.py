@@ -19,15 +19,59 @@ STATUS_PAUSED = "PAUSED"
 class FacebookError(RuntimeError):
     """Graph API вернул ошибку."""
 
-    def __init__(self, message: str, *, code: int | None = None, subcode: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        subcode: int | None = None,
+        kind: str = "",
+    ):
         super().__init__(message)
         self.code = code
         self.subcode = subcode
+        self.kind = kind
+
+    def __str__(self) -> str:
+        # Без кода «Invalid request.» ничего не говорит о причине.
+        base = super().__str__()
+        bits = [f"#{self.code}"] if self.code is not None else []
+        if self.subcode:
+            bits.append(f"подкод {self.subcode}")
+        return f"{base} ({', '.join(bits)})" if bits else base
+
+    @property
+    def is_transport_problem(self) -> bool:
+        """Сеть, а не Facebook: менять токен бессмысленно."""
+        return self.kind == "transport"
 
     @property
     def is_token_problem(self) -> bool:
-        # 190 — протухший/отозванный токен, 102 — сессия невалидна.
+        # 190 — протухший или отозванный токен, 102 — сессия невалидна.
         return self.code in {190, 102}
+
+    @property
+    def is_permission_problem(self) -> bool:
+        # 200 и 10 — прав не хватает, 3 — метод недоступен приложению.
+        return self.code in {200, 10, 3}
+
+    @property
+    def hint(self) -> str:
+        """Человеческая причина — то, что стоит показать в консоли."""
+        if self.is_transport_problem:
+            return "до graph.facebook.com не достучаться — проверьте сеть сервера"
+        if self.is_token_problem:
+            return "токен протух или отозван — перевыпустите его"
+        if self.is_permission_problem:
+            return "токену не хватает прав ads_management / ads_read"
+        if self.code == 100:
+            return (
+                "Facebook не понял запрос. Чаще всего это токен системного "
+                "пользователя: у него нет пути me/adaccounts"
+            )
+        if self.code == 17 or self.code == 613:
+            return "упёрлись в лимит запросов Facebook — подождите и повторите"
+        return ""
 
 
 @dataclass
@@ -46,7 +90,7 @@ class FacebookClient:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.request(method, self._url(path), params=params, **kwargs)
         except httpx.HTTPError as exc:
-            raise FacebookError(f"Facebook недоступен: {exc}") from exc
+            raise FacebookError(f"Facebook недоступен: {exc}", kind="transport") from exc
 
         try:
             body = response.json()
@@ -57,6 +101,7 @@ class FacebookClient:
             error = body.get("error", {}) if isinstance(body, dict) else {}
             raise FacebookError(
                 error.get("message") or f"Facebook вернул {response.status_code}",
+                kind=error.get("type", ""),
                 code=error.get("code"),
                 subcode=error.get("error_subcode"),
             )
@@ -72,17 +117,102 @@ class FacebookClient:
             params={"fields": "id,name,account_status,timezone_name,timezone_offset_hours_utc,currency"},
         )
 
+    ACCOUNT_FIELDS = "id,account_id,name,account_status,timezone_name,currency"
+
+    def _collect(self, path: str, params: dict, max_pages: int = 25) -> list[dict]:
+        """Проходит постранично по ребру Graph API."""
+        out: list[dict] = []
+        page = 0
+        while True:
+            body = self._request("GET", path, params=params)
+            out.extend(body.get("data", []))
+            page += 1
+            paging = body.get("paging", {}) or {}
+            after = (paging.get("cursors", {}) or {}).get("after")
+            if not after or not paging.get("next") or page >= max_pages:
+                break
+            params = dict(params, after=after)
+        return out
+
+    def describe_token(self) -> dict:
+        """Что это за токен: профиль или системный пользователь, с какими правами.
+
+        У системного пользователя нет ребра me/permissions — по нему и различаем.
+        """
+        info: dict = {
+            "name": "", "id": "", "permissions": [], "kind": "неизвестно",
+            "error": "", "hint": "",
+        }
+        try:
+            me = self._request("GET", "me", params={"fields": "id,name"})
+        except FacebookError as exc:
+            info["error"] = str(exc)
+            info["hint"] = exc.hint
+            return info
+
+        info["id"] = me.get("id", "")
+        info["name"] = me.get("name", "")
+        try:
+            granted = self._request("GET", "me/permissions", params={"limit": 200}).get("data", [])
+            info["permissions"] = [
+                p["permission"] for p in granted if p.get("status") == "granted"
+            ]
+            info["kind"] = "токен профиля"
+        except FacebookError:
+            info["kind"] = "токен системного пользователя"
+        return info
+
     def list_accounts(self) -> list[dict]:
         """Кабинеты, доступные токену социального аккаунта."""
-        body = self._request(
-            "GET",
-            "me/adaccounts",
-            params={
-                "fields": "id,account_id,name,account_status,timezone_name,currency",
-                "limit": 200,
-            },
-        )
-        return body.get("data", [])
+        return self.list_accounts_verbose()[0]
+
+    def list_accounts_verbose(self) -> tuple[list[dict], list[str]]:
+        """Кабинеты и заметки о том, как они искались.
+
+        Основной путь — me/adaccounts: так отдаёт кабинеты токен профиля, ради
+        которого всё и затевалось. Если это оказался токен системного
+        пользователя, такого ребра у него нет — тогда пробуем через бизнес.
+        """
+        notes: list[str] = []
+        found: dict[str, dict] = {}
+
+        try:
+            for row in self._collect(
+                "me/adaccounts", {"fields": self.ACCOUNT_FIELDS, "limit": 200}
+            ):
+                found[str(row.get("account_id") or row.get("id"))] = row
+        except FacebookError as exc:
+            notes.append(f"me/adaccounts: {exc}")
+            if exc.hint:
+                notes.append(f"  {exc.hint}")
+
+        if found:
+            return list(found.values()), notes
+
+        try:
+            businesses = self._collect("me/businesses", {"fields": "id,name", "limit": 100})
+        except FacebookError as exc:
+            notes.append(f"me/businesses: {exc}")
+            businesses = []
+
+        for business in businesses:
+            for edge in ("owned_ad_accounts", "client_ad_accounts"):
+                try:
+                    rows = self._collect(
+                        f"{business['id']}/{edge}",
+                        {"fields": self.ACCOUNT_FIELDS, "limit": 200},
+                    )
+                except FacebookError as exc:
+                    notes.append(f"{business.get('name') or business['id']}/{edge}: {exc}")
+                    continue
+                if rows:
+                    notes.append(
+                        f"{business.get('name') or business['id']} · {edge}: {len(rows)}"
+                    )
+                for row in rows:
+                    found[str(row.get("account_id") or row.get("id"))] = row
+
+        return list(found.values()), notes
 
     # ----------------------------------------------------------------- адсеты
 
@@ -117,16 +247,7 @@ class FacebookClient:
                 [{"field": "effective_status", "operator": "IN", "value": statuses}]
             )
 
-        out: list[dict] = []
-        path = _act(account_id) + "/adsets"
-        while True:
-            body = self._request("GET", path, params=params)
-            out.extend(body.get("data", []))
-            after = (body.get("paging", {}).get("cursors", {}) or {}).get("after")
-            if not after or not body.get("paging", {}).get("next"):
-                break
-            params = dict(params, after=after)
-        return out
+        return self._collect(_act(account_id) + "/adsets", params)
 
     def set_adset_status(self, adset_id: str, status: str) -> bool:
         self._request("POST", adset_id, params={"status": status})

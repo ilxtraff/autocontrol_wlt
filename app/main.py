@@ -49,6 +49,13 @@ templates.env.globals["DECISION_TITLES"] = DECISION_TITLES
 templates.env.globals["SOURCE_TITLES"] = SOURCE_TITLES
 templates.env.globals["ROLE_TITLES"] = ROLE_TITLES
 templates.env.globals["RECOVERY_HOURS"] = settings.recovery_hours
+templates.env.globals["TOKEN_STATUS"] = {
+    "ok": "ЖИВОЙ",
+    "unknown": "НЕ ПРОВЕРЕН",
+    "invalid": "НЕ РАБОТАЕТ",
+    "no_perms": "НЕТ ПРАВ",
+    "no_accounts": "НЕТ КАБИНЕТОВ",
+}
 
 
 def bootstrap_admin() -> None:
