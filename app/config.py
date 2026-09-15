@@ -57,6 +57,11 @@ class Settings:
     human_resume_check: bool
     dry_run: bool
 
+    # Движок сам находит новые адсеты в кабинетах и ставит их под контроль.
+    auto_import_adsets: bool
+    auto_import_minutes: int
+    auto_import_all_statuses: bool
+
     keitaro_timezone: str
     keitaro_adset_field: str
     keitaro_timeout: int
@@ -87,6 +92,9 @@ def get_settings() -> Settings:
         run_engine_in_web=_bool("AC_RUN_ENGINE_IN_WEB", True),
         human_resume_check=_bool("AC_HUMAN_RESUME_CHECK", True),
         dry_run=_bool("AC_DRY_RUN", False),
+        auto_import_adsets=_bool("AC_AUTO_IMPORT_ADSETS", True),
+        auto_import_minutes=_int("AC_AUTO_IMPORT_MINUTES", 60),
+        auto_import_all_statuses=_bool("AC_AUTO_IMPORT_ALL_STATUSES", False),
         keitaro_timezone=os.getenv("AC_KEITARO_TIMEZONE", "Europe/Moscow"),
         keitaro_adset_field=os.getenv("AC_KEITARO_ADSET_FIELD", "sub_id_6"),
         keitaro_timeout=_int("AC_KEITARO_TIMEOUT", 45),

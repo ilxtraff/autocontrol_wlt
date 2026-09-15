@@ -53,6 +53,7 @@ class TickReport:
     released: int = 0
     human_resumed: int = 0
     tokens_refreshed: int = 0
+    imported: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -64,6 +65,7 @@ class TickReport:
             "released": self.released,
             "human_resumed": self.human_resumed,
             "tokens_refreshed": self.tokens_refreshed,
+            "imported": self.imported,
             "errors": self.errors,
         }
 
@@ -180,8 +182,81 @@ class AutocontrolEngine:
 
     # ---------------------------------------------------------------- главный
 
+    def _auto_import_adsets(self, session: Session, report: TickReport) -> None:
+        """Сам находит в кабинетах новые адсеты и ставит их под контроль.
+
+        Так подхватываются и только что добавленные кабинеты, и новые заливы —
+        без ручной команды. Кабинет пересматривается не чаще, чем задано в
+        настройках, чтобы не долбить Facebook на каждом тике.
+        """
+        from datetime import timedelta
+
+        from app.clients.facebook import STATUS_ACTIVE
+        from app.models import GeoThreshold
+        from app.naming import detect_geo
+        from app.services import ServiceError, attach_adset
+
+        if not self.settings.auto_import_adsets:
+            return
+
+        known = {g for (g,) in session.execute(select(GeoThreshold.geo)).all()}
+        if not known:
+            return  # без общих порогов гео не распознать и адсет не поставить
+
+        interval = timedelta(minutes=self.settings.auto_import_minutes)
+        now = self.now()
+        accounts = session.scalars(select(AdAccount).where(AdAccount.is_active.is_(True))).all()
+
+        for account in accounts:
+            synced = _aware(account.adsets_synced_at)
+            if synced is not None and now - synced < interval:
+                continue
+            if account.social is None or not account.timezone_name:
+                continue
+            try:
+                fb = self.facebook_for(account)
+                statuses = None if self.settings.auto_import_all_statuses else [STATUS_ACTIVE]
+                fb_adsets = fb.list_adsets(account.account_id, statuses=statuses)
+            except (FacebookError, UnknownTimezone) as exc:
+                log.debug("автоимпорт %s: %s", account.account_id, exc)
+                continue
+
+            # Уже известные адсеты (в любом состоянии) не трогаем — в том числе
+            # снятые вручную, чтобы автоимпорт их не воскрешал.
+            existing = {
+                a for (a,) in session.execute(
+                    select(ControlledAdset.adset_id).where(
+                        ControlledAdset.account_pk == account.id
+                    )
+                ).all()
+            }
+            added = 0
+            for item in fb_adsets:
+                adset_id = str(item.get("id", ""))
+                if not adset_id or adset_id in existing:
+                    continue
+                campaign = item.get("campaign") or {}
+                geo = detect_geo(item.get("name"), campaign.get("name"), known)
+                if geo is None:
+                    continue
+                try:
+                    attach_adset(
+                        session, adset_id=adset_id, account=account, geo=geo,
+                        name=item.get("name", ""), campaign_id=campaign.get("id", ""),
+                        campaign_name=campaign.get("name", ""),
+                    )
+                    added += 1
+                except ServiceError:
+                    continue  # нет порога под это гео — пропускаем молча
+            account.adsets_synced_at = now
+            if added:
+                report.imported += added
+                log.info("автоимпорт: %s новых адсетов в %s", added, account.account_id)
+
     def tick(self, session: Session) -> TickReport:
         report = TickReport(started_at=self.now())
+
+        self._auto_import_adsets(session, report)
 
         adsets = session.scalars(
             select(ControlledAdset).where(
