@@ -53,7 +53,7 @@ def test_reports_paused_only(wired, monkeypatch, capsys):
         return [] if statuses and "ACTIVE" in statuses else rows
     monkeypatch.setattr(fb.FacebookClient, "list_adsets", adsets)
     out = _run(capsys)
-    assert "активных адсетов нет" in out
+    assert "активных нет" in out
     assert "PAUSED: 1" in out
     assert "--all" in out
 
@@ -127,5 +127,35 @@ def test_no_geo_tokens_shows_sample_names(wired, monkeypatch, capsys):
         ],
     )
     out = _run(capsys)
-    assert "нет двухбуквенных кодов" in out
+    assert "нет кодов гео" in out
     assert "promo_final_v2" in out
+
+
+def test_imports_across_all_accounts(wired, monkeypatch, capsys):
+    """Без --account команда проходит по всем кабинетам."""
+    from sqlalchemy import select
+
+    import app.db as db
+    from app.models import AdAccount, ControlledAdset, KeitaroProfile, SocialAccount
+
+    # Заведём второй кабинет к тому, что создаёт wired.
+    with wired() as s:
+        k = s.scalar(select(KeitaroProfile))
+        soc = s.scalar(select(SocialAccount))
+        s.add(AdAccount(account_id="888", title="Второй", timezone_name="Europe/Warsaw",
+                        social_id=soc.id, keitaro_id=k.id))
+        s.commit()
+
+    def adsets(self, account_id, statuses=None):
+        return [{"id": f"{account_id}-1", "name": "cz1_it_x",
+                 "effective_status": "ACTIVE", "campaign": {"name": "[it] c"}}]
+    monkeypatch.setattr(fb.FacebookClient, "list_adsets", adsets)
+
+    args = argparse.Namespace(account=None, geo=None, user=None, all=False, dry_run=False)
+    cli.cmd_import_adsets(args)
+
+    with wired() as s:
+        rows = {a.adset_id for a in s.scalars(select(ControlledAdset))}
+    # По одному адсету из каждого кабинета (777 из фикстуры + 888).
+    assert rows == {"777-1", "888-1"}
+    assert "по всем кабинетам: 2" in capsys.readouterr().out

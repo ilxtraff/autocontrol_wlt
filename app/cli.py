@@ -649,22 +649,93 @@ def cmd_keitaro_probe(args: argparse.Namespace) -> None:
         print("\nПришлите этот вывод целиком — по нему подстрою движок точно.")
 
 
-def cmd_import_adsets(args: argparse.Namespace) -> None:
-    """Массовая постановка адсетов кабинета под контроль."""
+def _import_one_account(session, engine, account, known, owner, args) -> tuple[int, int, int]:
+    """Ставит под контроль адсеты одного кабинета. Возвращает (added, skipped, geo_fail)."""
+    from collections import Counter
+
     from app.clients.facebook import FacebookError
-    from app.engine import AutocontrolEngine
-    from app.models import AdAccount, GeoThreshold, UserGeoThreshold
     from app.naming import detect_geo, geo_candidates
     from app.services import ServiceError, attach_adset
 
+    label = account.title or account.account_id
+    try:
+        fb_client = engine.facebook_for(account)
+        adsets = fb_client.list_adsets(
+            account.account_id, statuses=None if args.all else ["ACTIVE"]
+        )
+    except FacebookError as exc:
+        print(f"[{label}] Facebook: {exc}")
+        return 0, 0, 0
+
+    if not adsets and not args.all:
+        try:
+            everything = fb_client.list_adsets(account.account_id, statuses=None)
+        except FacebookError:
+            everything = []
+        if everything:
+            by_status = Counter(
+                (a.get("effective_status") or a.get("status") or "?") for a in everything
+            )
+            breakdown = ", ".join(f"{k}: {v}" for k, v in by_status.most_common())
+            print(f"[{label}] активных нет. Всего {len(everything)} — {breakdown} (см. --all)")
+        else:
+            print(f"[{label}] нет ни одного адсета")
+        return 0, 0, 0
+
+    added = skipped = geo_fail = 0
+    candidate_counts: Counter = Counter()
+    sample_names: list[str] = []
+    for item in adsets:
+        campaign = item.get("campaign") or {}
+        geo = args.geo.upper() if args.geo else detect_geo(
+            item.get("name"), campaign.get("name"), known
+        )
+        if geo is None:
+            skipped += 1
+            geo_fail += 1
+            for code in geo_candidates(item.get("name"), campaign.get("name")):
+                candidate_counts[code] += 1
+            if len(sample_names) < 5:
+                camp = campaign.get("name", "")
+                sample_names.append(item.get("name", "") + (f"  ←  {camp}" if camp else ""))
+            continue
+        if args.dry_run:
+            print(f"  [{label}] поставил {item.get('name'):30} {geo}")
+            added += 1
+            continue
+        try:
+            attach_adset(
+                session, adset_id=item["id"], account=account, geo=geo,
+                name=item.get("name", ""), campaign_id=campaign.get("id", ""),
+                campaign_name=campaign.get("name", ""), owner=owner,
+            )
+        except ServiceError as exc:
+            print(f"  [{label}] пропуск {item.get('name')}: {exc}")
+            skipped += 1
+            continue
+        print(f"  [{label}] поставил {item.get('name'):30} {geo}")
+        added += 1
+
+    if geo_fail and not args.geo:
+        new_codes = [(c, n) for c, n in candidate_counts.most_common() if c not in known]
+        if new_codes:
+            shown = ", ".join(f"{c} (×{n})" for c, n in new_codes[:8])
+            print(f"  [{label}] {geo_fail} без гео. В именах похоже на гео, но нет в порогах: {shown}")
+        elif not candidate_counts:
+            ex = ", ".join(n for n in sample_names if n)
+            print(f"  [{label}] {geo_fail} без гео. В именах нет кодов гео — нужен --geo XX. Примеры: {ex}")
+        else:
+            print(f"  [{label}] {geo_fail} без гео (нестандартные имена)")
+    return added, skipped, geo_fail
+
+
+def cmd_import_adsets(args: argparse.Namespace) -> None:
+    """Ставит адсеты под контроль — по одному кабинету или сразу по всем."""
+    from app.engine import AutocontrolEngine
+    from app.models import AdAccount, GeoThreshold, UserGeoThreshold
+
     engine = AutocontrolEngine()
     with session_scope() as session:
-        account = session.scalar(
-            select(AdAccount).where(AdAccount.account_id == args.account.removeprefix("act_"))
-        )
-        if account is None:
-            sys.exit(f"кабинет {args.account} не заведён — добавьте его на «Интеграциях»")
-
         owner = None
         if args.user:
             owner = session.scalar(select(User).where(User.login == args.user.strip().lower()))
@@ -678,98 +749,34 @@ def cmd_import_adsets(args: argparse.Namespace) -> None:
                     select(UserGeoThreshold.geo).where(UserGeoThreshold.user_id == owner.id)
                 ).all()
             }
-        if not known:
+        if not known and not args.geo:
             sys.exit("не задано ни одного порога — сначала заполните пороги по гео")
 
-        fb_client = engine.facebook_for(account)
-        try:
-            adsets = fb_client.list_adsets(
-                account.account_id, statuses=None if args.all else ["ACTIVE"]
-            )
-        except FacebookError as exc:
-            sys.exit(f"Facebook: {exc}")
+        if args.account:
+            accounts = [session.scalar(
+                select(AdAccount).where(AdAccount.account_id == args.account.removeprefix("act_"))
+            )]
+            if accounts[0] is None:
+                sys.exit(f"кабинет {args.account} не заведён — добавьте его на «Интеграциях»")
+        else:
+            accounts = list(session.scalars(select(AdAccount).order_by(AdAccount.title)))
+            if not accounts:
+                sys.exit("кабинетов нет — заведите их: python -m app.cli import-accounts")
+            print(f"прохожу по всем кабинетам: {len(accounts)}\n")
 
-        if not adsets and not args.all:
-            # Пусто по активным — посмотрим, есть ли вообще адсеты в кабинете,
-            # чтобы отличить «нет адсетов» от «нет активных».
-            try:
-                everything = fb_client.list_adsets(account.account_id, statuses=None)
-            except FacebookError:
-                everything = []
-            if everything:
-                from collections import Counter
-
-                by_status = Counter(
-                    (a.get("effective_status") or a.get("status") or "?") for a in everything
-                )
-                breakdown = ", ".join(f"{k}: {v}" for k, v in by_status.most_common())
-                print(f"активных адсетов нет. Всего в кабинете {len(everything)} — {breakdown}")
-                print("Добавьте флаг --all, чтобы взять не только активные.")
-            else:
-                print("в кабинете нет ни одного адсета — проверьте, тот ли это кабинет")
-            return
-
-        from collections import Counter
-
-        added = skipped = geo_fail = 0
-        candidate_counts: Counter = Counter()
-        sample_names: list[str] = []
-        for item in adsets:
-            campaign = item.get("campaign") or {}
-            geo = args.geo.upper() if args.geo else detect_geo(
-                item.get("name"), campaign.get("name"), known
-            )
-            if geo is None:
-                print(f"  пропуск  {item.get('name')}: не понял гео")
-                skipped += 1
-                geo_fail += 1
-                # Копим, что в этих именах вообще похоже на гео.
-                for code in geo_candidates(item.get("name"), campaign.get("name")):
-                    candidate_counts[code] += 1
-                if len(sample_names) < 5:
-                    camp = (item.get("campaign") or {}).get("name", "")
-                    sample_names.append(
-                        f"{item.get('name', '')}"
-                        + (f"  ←  кампания: {camp}" if camp else "")
-                    )
-                continue
-            if args.dry_run:
-                print(f"  поставил {item.get('name'):34} {geo}")
-                added += 1
-                continue
-            try:
-                attach_adset(
-                    session, adset_id=item["id"], account=account, geo=geo,
-                    name=item.get("name", ""), campaign_id=campaign.get("id", ""),
-                    campaign_name=campaign.get("name", ""), owner=owner,
-                )
-            except ServiceError as exc:
-                print(f"  пропуск  {item.get('name')}: {exc}")
-                skipped += 1
-                continue
-            print(f"  поставил {item.get('name'):34} {geo}")
-            added += 1
+        total_added = total_skipped = total_geo_fail = 0
+        for account in accounts:
+            a, sk, gf = _import_one_account(session, engine, account, known, owner, args)
+            total_added += a
+            total_skipped += sk
+            total_geo_fail += gf
 
         word = "поставил бы" if args.dry_run else "поставил"
-        print(f"\n{word} под контроль: {added}, пропустил: {skipped}")
-        if geo_fail and not args.geo:
-            print(
-                f"у {geo_fail} адсетов гео не распозналось по имени. Задайте всем одно "
-                "через --geo XX либо заведите нужные гео в порогах"
-            )
-            known_codes = {c for c in candidate_counts if c in known}
-            new_codes = [(c, n) for c, n in candidate_counts.most_common() if c not in known]
-            if new_codes:
-                shown = ", ".join(f"{c} (×{n})" for c, n in new_codes[:8])
-                print(f"  в именах похоже на гео, но нет в порогах: {shown}")
-                print("  если это гео — заведите их в порогах, и они распознаются сами")
-            elif not candidate_counts:
-                print("  в именах вообще нет двухбуквенных кодов гео — только --geo XX")
-                print(f"  примеры имён: {', '.join(n for n in sample_names if n)}")
-            elif known_codes:
-                # Кандидаты есть и они в порогах — значит имена нестандартные.
-                print(f"  примеры имён: {', '.join(n for n in sample_names if n)}")
-        if args.dry_run and added:
+        print(f"\nИТОГО {word} под контроль: {total_added}, пропустил: {total_skipped}")
+        if total_geo_fail and not args.geo:
+            print("Где гео не распозналось — заведите эти гео в порогах и повторите,")
+            print("либо задайте одно гео всем через --geo XX.")
+        if args.dry_run and total_added:
             print("это была примерка — повторите без --dry-run")
 
 
@@ -823,8 +830,8 @@ def main() -> None:
     p.add_argument("--quiet", action="store_true", help="без построчного вывода")
     p.set_defaults(func=cmd_import_accounts)
 
-    p = sub.add_parser("import-adsets", help="поставить адсеты кабинета под контроль")
-    p.add_argument("--account", required=True, help="ID рекламного кабинета")
+    p = sub.add_parser("import-adsets", help="поставить адсеты под контроль (все кабинеты или один)")
+    p.add_argument("--account", help="ID кабинета; без него — по всем кабинетам сразу")
     p.add_argument("--geo", help="задать гео всем вместо определения по имени")
     p.add_argument("--user", help="чьи личные пороги применять")
     p.add_argument("--all", action="store_true", help="не только активные адсеты")
